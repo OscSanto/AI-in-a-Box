@@ -1,0 +1,188 @@
+experiment:
+  name: "exp_minimal_kiwix_memory_graph"
+  description: "Minimal Kiwix-based retrieval with query memory graph reuse for semantically similar queries"
+  alias: "exp01"
+
+dataset:
+  source: "zim"
+  zim_path: "wikipedia_en_all_maxi_2025-08"
+  zim_content_id: "wikipedia_en_all_maxi_2025-08"   # USED — config.zim_content_id
+  zim_search_term: "Albert"
+  # NOT USED —
+  #language: "en"
+  #namespace: "A"
+  #article_filter:
+  #  enabled: false
+
+# SEARCH ENGINE
+kiwix:
+  enabled: true
+  endpoint: "http://127.0.0.1/kiwix/search"   # USED — config.kiwix_endpoint
+  result_limit: 15                             # USED — config.kiwix_result_limit (Stage 6b reranks these down to max_articles_to_chunk)
+
+##NORMALIZATION #NOT USED - article_cleaner.py
+
+# text-embedding-3-small  (1356)
+# text-embedding-3-large (3072)
+# all-minilm:22m (384) 
+# snowflake-artic-embed:xs  (512)
+# jina-embeddings-v4  (multilingual, PDFs, tables, screenshots, multimodal) (32768 tokens support)
+# nomic-embed-text-v1.5 (titles,chunks,query) (768)
+
+# QUERY EMBEDDING 
+query_embedding:
+  enabled: true             #  USED — config.query_embedding_enabled 
+  model: "snowflake-arctic-embed:xs"    # USED — config.embedding_model
+  dimension: auto            # USED — config.embedding_dim  (auto = probe model on startup)
+  keep_alive: "20m"          # USED — config.embedding_keep_alive (how long Ollama keeps model in RAM)
+  # NOT USED 
+  #normalize: true
+  #batch_size: 1
+
+
+# CHUNKING
+# [info] chunk_tokens controls how big input chunks are (text fed into context)
+chunking:
+  # NOT USED — enabled and split_by not read by config.py
+  #enabled: true
+  #split_by: paragraph
+  overlap_tokens: 75            # USED — config.chunk_overlap_tokens (chars appended from adjacent paragraphs; 0 = off)
+  max_articles_to_chunk: 5     # USED — config.max_articles_to_chunk (per entity)
+  max_chunks_per_article: 10   # USED — config.max_chunks_per_article (top-scoring article gets this many chunks)
+  title_score_threshold: 0.3  # USED — config.title_score_threshold (drop articles below this title-rank score)
+  max_chunk_chars: 800         # USED — config.max_chunk_chars (merge small paragraphs up to this size) (600 chars = ~100 words)
+  article_cleaning: true       # USED — strips junk sections, citation markers, edit links
+
+# CHUNK RANKING
+chunk_ranking:
+  # NOT USED — enabled and method not read by config.py (BM25 always used)
+  #enabled: true
+  #method: bm25_local
+  topk_chunks: 5  # USED — config.topk_chunks
+
+# KNOWLEDGE GRAPH
+content_graph:
+  enabled: true   # USED — config.content_graph_enabled
+
+  traversal:
+    max_hops: 2        # USED — config.content_graph_max_hops
+    max_neighbors: 15  # USED — config.content_graph_max_neighbors
+
+# NOT USED 
+#reranker:
+#  enabled: false
+#  model: null
+#  topk_rerank: null
+
+# Model: qwen2.5:1.5b-instruct-q4_K_M" ~15toks/s
+# Model: smollm2:360m	~40 tok/s	weaker
+# Model: smollm2:135m	~80 tok/s	minimal
+# Model: qwen3.5:2b
+# Model: qwen3.5:0.8b
+# Model: phi3.5-mini-instruct:q4	
+#
+
+# Utility
+# qwen2.5:0.5b
+
+# GENERATION
+llm:
+  enabled: true
+  backend: "ollama"                        # USED — config.llm_backend
+  model: "smollm2:360m"   # USED — config.llm_model (Stage 11 final answer generation)
+  utility_model: "smollm2:360m"                            # USED — config.llm_utility_model (Stage 2 query rewrite)
+  temperature: 0.0                         # USED — config.llm_temperature
+  max_new_tokens: 2048                     # USED — config.llm_max_tokens
+  # NOT USED
+  #include_citations: true
+  #answer_style: "concise"
+
+# QUERY MEMORY GRAPH
+query_memory_graph:
+  enabled: true          # USED — config.query_memory_enabled
+
+  similarity_search:
+    # NOT USED — metric and embedding_model not read (always cosine, always uses query_embedding.model)
+    #metric: "cosine"
+    #embedding_model: "BAAI/bge-small-en-v1.5"
+    # dimension read from query_embedding.dimension above
+    topk: 5          # USED — config.qm_topk
+    thresholds:
+      high_similarity: 0.97    # USED — config.qm_high_sim — cache hit threshold
+      medium_similarity: 0.85  # NOT USED — in Config but pipeline only checks high_sim
+      low_similarity: 0.75     # NOT USED — not in Config, not checked in pipeline
+
+  # NOT USED — traversal within query memory not implemented
+  #traversal:
+  #  max_hops: 2
+  #  max_neighbors: 10
+  #  allow_entity_expansion: true
+  #  allow_article_expansion: true
+
+ 
+# NOT USED — metrics flags not read by config.py
+# Metrics are saved automatically to runs/exp01/metrics.jsonl by pipeline.py
+#metrics:
+#  enabled: true
+#  log_latency: true
+#  log_stage_breakdown: true
+#  log_ram: true
+#  log_cpu: true
+#  log_cache_hit_rate: true
+#  log_query_reuse_rate: true
+#  log_graph_stats: true
+#  log_kiwix_hit_distribution: true
+#  log_citation_coverage: true
+#  log_answer_length: true
+#  log_tokens_generated: true
+#  compare_reuse_vs_full_pipeline_latency: true
+#  output_dir: "./runs/exp_minimal_kiwix_memory_graph"
+
+server:
+  port: 5050          # USED — config.server_port
+  host: "0.0.0.0"    # USED — config.server_host
+
+storage:
+  # data_dir: "./data/exp_minimal_kiwix_memory_graph/"  # optional override; defaults to data/{experiment.name}/
+
+# QUERY REWRITE — deprecated, folded into intent_classifier below
+query_rewrite:
+  enabled: false  # USED — config.query_rewrite_enabled (no longer called by pipeline)
+
+# INTENT CLASSIFIER (Stage 2 — single LLM call: classify intent + rewrite query)
+# To add a new mode: add an entry here AND a routing branch in pipeline.py build_context().
+intent_classifier:
+  enabled: true          # USED — config.intent_classifier_enabled
+  routing_enabled: false # Not USED — config.intent_routing_enabled; false = always kiwix, true = route chat/summarize/wiki_url
+  min_text_chars: 300    # USED — config.intent_min_text_chars (heuristic: texts longer than this trigger summarize pre-check)
+  max_queries: 3         # USED — config.kiwix_max_queries (max search terms LLM produces for kiwix mode)
+  max_entities: 3        # USED — config.kiwix_max_entities (max named entities for exact-title lookup)
+
+  # Mode registry — shown verbatim to the LLM. Order matters.
+  # enabled: false stubs out a mode without removing it from the registry.
+  intents:               # USED — config.intent_classifier_intents
+    - name: kiwix
+      description: "Factual question or topic to look up in the knowledge base"
+      enabled: true
+
+    - name: summarize
+      description: "User wants to summarize content they provided — pasted text, a URL, or a PDF"
+      enabled: false
+
+    - name: wiki_url
+      description: "User provided a local Wikipedia/Kiwix article URL and wants to ask about it"
+      enabled: false
+
+    - name: chat
+      description: "Greeting, casual conversation, or non-retrieval question that needs no knowledge-base lookup"
+      enabled: true
+
+# RELATION EXTRACTION (LLM extracts entity→relation→entity triples from chunks into content graph)
+ner:
+  llm_extraction_enabled: false   # USED — config.entity_llm_enabled
+  llm_extraction_mode: "server"  # USED — "server" (Ollama) or "client" (WebLLM POSTs to /relations)
+
+# INFERENCE MODE
+inference:
+  default_mode: "server"   # USED — "server" or "client". Sets initial GPU toggle state for all users.
+  allow_user_toggle: true  # USED — if false, user cannot switch modes; admin choice is locked.

@@ -1,0 +1,45 @@
+#  Large assets (downloaded via scripts/download_webllm.sh)
+webui/models/
+webui/webllm/
+
+#  Runtime data
+data/
+runs/
+
+#  Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+#  webui-src (SvelteKit / Vite / Node)
+webui-src/test-results
+webui-src/node_modules
+webui-src/.output
+webui-src/.vercel
+webui-src/.netlify
+webui-src/.wrangler
+webui-src/.svelte-kit
+webui-src/build
+webui-src/vite.config.js.timestamp-*
+webui-src/vite.config.ts.timestamp-*
+webui-src/*storybook.log
+webui-src/storybook-static
+webui-src/*.code-workspace
+
+#  OS / editor
+.DS_Store
+Thumbs.db
+
+#  Env
+.env
+.env.*
+!.env.example
+!.env.test
+
+# Scratch code
+scratch.py
