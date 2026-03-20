@@ -196,7 +196,7 @@ class Pipeline:
         # are unrelated and won't yield useful alias/disambiguation data.
         # Always keep at least max_articles_to_chunk candidates so the selection
         # filter below has something to work with.
-        _fetch_candidates = [r for r in kiwix_results if r.get("_title_score", 1.0) >= 0.0]
+        _fetch_candidates = [r for r in kiwix_results if r.get("_title_score", 1.0) >= 0.0]# TODO: Make threshold configurable, currently 0 to filter out negatively scored articles that are unlikely to be relevant and waste time fetching.
         if len(_fetch_candidates) < config.max_articles_to_chunk:
             _fetch_candidates = kiwix_results[:config.max_articles_to_chunk]
 
@@ -281,6 +281,7 @@ class Pipeline:
                 art["_chunk_budget"] = config.max_chunks_per_article
 
         article_chunks = []
+        chunk_meta: dict = {}  # rank_chunk → {title, section, para, left, right, para_idx}
         graph_articles = []
         for art in kiwix_results:
             # Reuse sections fetched during Stage 6b — avoids a duplicate HTTP call
@@ -301,9 +302,14 @@ class Pipeline:
                     break
                 left  = (_last_sentence(all_paras[i - 1][1]) + " ") if i > 0 and USE_OVERLAP else ""
                 right = (" " + _first_sentence(all_paras[i + 1][1])) if i < len(all_paras) - 1 and USE_OVERLAP else ""
-                chunk = f"[{title} | {section}]\n{left}{para}{right}"
-                if len(chunk) >= config.min_paragraph_chars:
-                    article_chunks.append(chunk)
+                rank_chunk = f"[{title} | {section}]\n{left}{para}{right}"
+                if len(rank_chunk) >= config.min_paragraph_chars:
+                    article_chunks.append(rank_chunk)
+                    chunk_meta[rank_chunk] = {
+                        "title": title, "section": section,
+                        "para": para, "left": left, "right": right,
+                        "para_idx": i,
+                    }
                     art_chunk_count += 1
 
             # Collect for graph ingestion (all raw paragraphs, no overlap)
@@ -347,9 +353,42 @@ class Pipeline:
         mark(f"9_chunk_ranking — {len(top_chunks)} top chunks from {len(article_chunks)} total")
 
         # ====== Stage 10: context_assembly
-        # Chunks already carry [Title | Section] headers — no extra [Source N] wrapper needed.
-        # Double-labeling confuses small models into repeating structure instead of synthesizing.
-        context = "\n\n".join(top_chunks) if top_chunks else "No relevant content found."
+        # Smart overlap assembly: keep overlap for isolated chunks, strip when adjacent
+        # chunks are document-adjacent (same article, para_idx differs by 1) so the
+        # boundary sentence doesn't appear twice in the LLM context.
+        display_chunks = []
+        for idx, rc in enumerate(top_chunks):
+            meta = chunk_meta.get(rc)
+            if meta is None:
+                display_chunks.append(rc)
+                continue
+
+            title    = meta["title"]
+            section  = meta["section"]
+            para     = meta["para"]
+            left     = meta["left"]
+            right    = meta["right"]
+            para_idx = meta["para_idx"]
+
+            # Strip left overlap when the previous selected chunk is the adjacent paragraph
+            if left and idx > 0:
+                prev_meta = chunk_meta.get(top_chunks[idx - 1])
+                if (prev_meta and prev_meta["title"] == title
+                        and prev_meta["para_idx"] == para_idx - 1):
+                    left = ""
+
+            # Strip right overlap when the next selected chunk is the adjacent paragraph
+            if right and idx < len(top_chunks) - 1:
+                next_meta = chunk_meta.get(top_chunks[idx + 1])
+                if (next_meta and next_meta["title"] == title
+                        and next_meta["para_idx"] == para_idx + 1):
+                    right = ""
+
+            header = f"[{title} | {section}]"
+            body   = f"{left}{para}{right}".strip()
+            display_chunks.append(f"{header}\n{body}")
+
+        context = "\n\n".join(display_chunks) if display_chunks else "No relevant content found."
         mark("10_context_assembly")  # 11_llm_generation follows in Runner.run()
 
         messages = [
