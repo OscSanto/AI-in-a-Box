@@ -192,6 +192,14 @@ class Pipeline:
         mark(f"6_title_rerank — {len(kiwix_results)} articles scored")
 
         # ── Stage 6b: fetch sections + entity store learning
+        # Only fetch articles with a positive title score — negative-scored articles
+        # are unrelated and won't yield useful alias/disambiguation data.
+        # Always keep at least max_articles_to_chunk candidates so the selection
+        # filter below has something to work with.
+        _fetch_candidates = [r for r in kiwix_results if r.get("_title_score", 1.0) >= 0.0]
+        if len(_fetch_candidates) < config.max_articles_to_chunk:
+            _fetch_candidates = kiwix_results[:config.max_articles_to_chunk]
+
         def _fetch_sections(r):
             try:
                 return r, kiwix.fetch_article_sections(r["url"], config.max_chunk_chars)
@@ -199,7 +207,7 @@ class Pipeline:
                 return r, []
 
         with ThreadPoolExecutor(max_workers=8) as _ex:
-            fetched = list(_ex.map(_fetch_sections, kiwix_results))
+            fetched = list(_ex.map(_fetch_sections, _fetch_candidates))
 
         sections_by_title = learn_from_articles(entity_store, fetched)
         mark(f"6b_entity_store_learn — {len(sections_by_title)} articles observed")
