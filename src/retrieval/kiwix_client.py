@@ -33,29 +33,26 @@ TODO: def prompt_zim_selection(kiwix_endpoint: str, current_zim_id: str) -> dict
 
 """
 
-def lookup_article_by_title(endpoint: str, zim_content_id: str, title: str) -> dict | None:
-    """
-    Direct HEAD request for an exact article title.
-    Much faster and more reliable than search for known exact titles —
-    avoids Kiwix search ranking returning related articles instead of the exact one.
-    Returns a result dict {title, path, url} or None if not found.
-    """
-    parsed   = urlparse(endpoint)
-    base_url = f"{parsed.scheme}://{parsed.netloc}"
-    slug     = quote(title.replace(" ", "_"), safe="()/_:-")
 
-    for full_url, path in [
-        (f"{base_url}/kiwix/content/{zim_content_id}/{slug}",   f"/kiwix/content/{zim_content_id}/{slug}"),
-        (f"{base_url}/kiwix/content/{zim_content_id}/A/{slug}", f"/kiwix/content/{zim_content_id}/A/{slug}"),
-        (f"{base_url}/{zim_content_id}/A/{slug}",               f"/{zim_content_id}/A/{slug}"),
-    ]:
+def probe_kiwix_endpoint(configured: str, zim_id: str) -> str:
+    """Try configured endpoint first, then known fallbacks. Returns first that responds."""
+    candidates = [configured]
+    if ":8085" not in configured:
+        candidates.append(configured.replace("127.0.0.1", "127.0.0.1:8085"))
+    else:
+        candidates.append(configured.replace(":8085", ""))
+
+    for endpoint in candidates:
         try:
-            r = requests.head(full_url, timeout=5, allow_redirects=True)
+            url = f"{endpoint}?pattern=test&books.name={zim_id}&pageLength=1"
+            r = requests.get(url, timeout=5)
             if r.status_code == 200:
-                return {"title": title, "path": path, "url": full_url}
+                print(f"[Kiwix] endpoint probe OK: {endpoint}", flush=True)
+                return endpoint
         except Exception:
             pass
-    return None
+    print(f"[Kiwix] all endpoints failed — using configured: {configured}", flush=True)
+    return configured
 
 
 def _get(url: str, timeout: int):
@@ -118,7 +115,7 @@ def search_kiwix(endpoint: str, zim_content_id: str, query: str, limit: int) -> 
     parsed   = urlparse(endpoint)
     base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-    # ── Standard Kiwix search API ─────────────────────────────────────────────
+    # ===== Standard Kiwix search API 
     url = f"{endpoint}?pattern={query.replace(' ', '+')}&books.name={zim_content_id}&start=0&pageLength={limit}"
     response = _get(url, timeout=10)
     if response is not None:
@@ -133,7 +130,7 @@ def search_kiwix(endpoint: str, zim_content_id: str, query: str, limit: int) -> 
             results.append({"title": title, "path": href, "url": full_url})
         return results
 
-    # ── Slug fallback: search API unreachable (e.g. Android IIAB) ────────────
+    # =====  fallback: search unreachable (e.g. Android IIAB) 
     print(f"[Kiwix] search API unreachable — trying slug fallback for '{query}'", flush=True)
     results = []
     seen = set()
@@ -160,29 +157,6 @@ def search_kiwix(endpoint: str, zim_content_id: str, query: str, limit: int) -> 
     return results
 
 
-def fetch_article(url: str, config=None) -> str:
-    endpointResponse = _get(url, timeout=15)
-    if endpointResponse is None:
-        return ""
-
-    soup = BeautifulSoup(endpointResponse.content, "lxml")
-
-    # Target article body only to skip nav/sidebar/footer/TOC noise
-    body = soup.find(class_="mw-parser-output") or soup.find(id="mw-content-text") or soup
-
-    raw = body.get_text(separator="\n")
-
-    lines = []
-    for ln in raw.splitlines():
-        lines.append(ln.strip())
-
-    #filtered = []
-    #for ln in lines:
-    #    if len(ln) >= 30:
-    #        filtered.append(ln)
-
-    return "\n".join(lines)
-
 
 def fetch_article_sections(url: str, max_chunk_chars: int = 800) -> list:
     """
@@ -191,9 +165,8 @@ def fetch_article_sections(url: str, max_chunk_chars: int = 800) -> list:
 
     Paragraphs within a section are merged up to _MAX_CHUNK_CHARS so chunks have
     enough text for BM25 to work with. Skips junk sections and cleans citations.
-
-    Uses find_all() instead of .children so headings nested inside Kiwix/Wikipedia
-    div wrappers (e.g. <div class="mw-heading"><h2>...</h2></div>) are still found.
+    TODO: change this to just a section and text return only. Then do max_chunk_char truncating as a seperate step.
+        
     """
     resp = _get(url, timeout=15)
     if resp is None:
@@ -212,7 +185,8 @@ def fetch_article_sections(url: str, max_chunk_chars: int = 800) -> list:
     # (h2: Paragraph), (p: Paragraph), (h3: title), 
     def _flush_section():
         if current_paragraphs and not skip_section:
-            sections.append({"section": current_section, "paragraphs": list(current_paragraphs)})
+            # stores copy of current_paragraphs, then clears buffer for next section
+            sections.append({"section": current_section, "paragraphs": list(current_paragraphs)}) 
 
     def _merge_into_chunks(raw_paras: list) -> list:
     #Merge consecutive short paragraphs up to config.max_chunk_chars
@@ -262,8 +236,6 @@ def fetch_article_sections(url: str, max_chunk_chars: int = 800) -> list:
     return sections
 
 
-# ── Title filtering ───────────────────────────────────────────────────────────
-
 _JUNK_TITLE_PREFIXES = (
     "list of", "outline of", "index of", "glossary of",
     "portal:", "wikipedia:", "template:", "category:", "help:",
@@ -280,8 +252,6 @@ def _is_junk_title(title: str) -> bool:
         return True
     return False
 
-
-# ── Parallel search ───────────────────────────────────────────────────────────
 
 def parallel_search(endpoint: str, zim_id: str, entity_list: list, all_terms: list,
                     result_limit: int) -> tuple:

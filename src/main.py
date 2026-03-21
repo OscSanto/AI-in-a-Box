@@ -41,11 +41,11 @@ OLLAMA_SERVER_URL = "http://localhost:11434"
 
 # The webui and our applications PATHS used via FastAPI server
 LOCAL_PATHS = {"/", "/health", "/props", "/admin", "/admin/reset-cache", "/v1/models", "/v1/chat/completions",
-               "/config", "/context", "/remember", "/relations", "/sources",
+               "/config", "/context", "/remember", "/relations",
                "/webgpu-interceptor.js"}
 
 
-_last_sources: list = []   # most recent pipeline's retrieved articles
+_config.kiwix_endpoint = kiwixClient.probe_kiwix_endpoint(_config.kiwix_endpoint, _config.zim_content_id)
 _zim_meta = kiwixClient.get_zim_metadata(_config.kiwix_endpoint, _config.zim_content_id)
 
 _embedder      = Embedder(_config)
@@ -143,11 +143,6 @@ async def reset_cache():
     return {"ok": True, "removed": removed}
 
 
-@app.get("/sources")
-async def get_sources():
-    """Returns the Wikipedia articles retrieved by the most recent pipeline run."""
-    return {"articles": _last_sources}
-
 
 # ----- OLLAMA ENDPOINTS -----
 """
@@ -187,12 +182,10 @@ def _openai_stream(query: str, mode: str = "kiwix"):
             "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": finish_reason}],
         }
 
-    _last_sources = []
     _pending_sources: list = []
     _sources_emitted = False
 
     def _on_sources(sources):
-        _last_sources.extend(sources)
         _pending_sources.extend(sources)
 
     try:

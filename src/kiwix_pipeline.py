@@ -2,8 +2,7 @@ import json
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 from typing import Iterator
 
 import numpy as np
@@ -12,8 +11,7 @@ import retrieval.kiwix_client as kiwix
 import retrieval.chunk_ranker as ranker
 
 from retrieval import intent_classifier as ic
-from retrieval.intent_classifier import classify_intent
-from retrieval.kiwix_client import is_kiwix_url, lookup_article_by_title, parallel_search, _is_junk_title
+from retrieval.kiwix_client import parallel_search, _is_junk_title
 from retrieval.entity_store import (
     DynamicEntityStore,
     detect_subtopic_label,
@@ -103,8 +101,8 @@ class Pipeline:
                 _t_rewrite_done = time.time()
                 query_vec       = _f_embed.result()
                 _t_embed_done   = time.time()
-            mark("2_query_rewrite",   start=_t_parallel, end=_t_rewrite_done)
-            mark("3_query_embedding", start=_t_parallel, end=_t_embed_done)
+            mark("[parallel] 2_query_rewrite",   start=_t_parallel, end=_t_rewrite_done)
+            mark("[parallel] 3_query_embedding", start=_t_parallel, end=_t_embed_done)
         else:
             intent_result = ic.classify_intent(query.strip(), llm, config, mode)
             mark("2_query_rewrite")

@@ -1,6 +1,6 @@
 /**
  * Stores the Wikipedia articles retrieved by the most recent pipeline run.
- * Populated by fetching /sources after each query completes.
+ * Populated via the inline SSE sources chunk emitted before the first text token.
  */
 
 export interface ArticleSource {
@@ -13,16 +13,6 @@ let _articles = $state<ArticleSource[]>([]);
 
 export function articles(): ArticleSource[] {
 	return _articles;
-}
-
-export async function fetchSources(): Promise<void> {
-	try {
-		const res = await fetch('/sources');
-		const data = await res.json();
-		_articles = data.articles ?? [];
-	} catch {
-		// non-fatal — panel stays empty on error
-	}
 }
 
 export function setArticles(sources: ArticleSource[]): void {
