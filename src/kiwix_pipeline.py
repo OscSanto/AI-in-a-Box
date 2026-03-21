@@ -91,24 +91,29 @@ class Pipeline:
             print(f"[pipeline] {stage} | took={took}s | total={round(now - t0, 3)}s", flush=True)
 
         print(f"\n[pipeline] ===== query: {query} =====", flush=True)
-        # =========== Stage 2 + 3: query_rewrite and query_embedding in parallel
-        # Embedding uses a different Ollama endpoint (/api/embed vs /api/chat)
-        # so both can be in-flight simultaneously.
-        _t_parallel = time.time()
-        with ThreadPoolExecutor(max_workers=2) as _ex:
-            _f_rewrite = _ex.submit(ic.classify_intent, query.strip(), llm, config, mode)
-            _f_embed   = _ex.submit(embedder.embed, query.strip())
-
-            intent_result   = _f_rewrite.result()
-            _t_rewrite_done = time.time()
-            query_vec       = _f_embed.result()
-            _t_embed_done   = time.time()
+        # =========== Stage 2 + 3: query_rewrite and query_embedding
+        # parallel=True  — both hit different Ollama endpoints simultaneously (faster)
+        # parallel=False — run sequentially for accurate per-stage wall-clock timings
+        if config.pipeline_parallel_stages_2_3:
+            _t_parallel = time.time()
+            with ThreadPoolExecutor(max_workers=2) as _ex:
+                _f_rewrite = _ex.submit(ic.classify_intent, query.strip(), llm, config, mode)
+                _f_embed   = _ex.submit(embedder.embed, query.strip())
+                intent_result   = _f_rewrite.result()
+                _t_rewrite_done = time.time()
+                query_vec       = _f_embed.result()
+                _t_embed_done   = time.time()
+            mark("2_query_rewrite",   start=_t_parallel, end=_t_rewrite_done)
+            mark("3_query_embedding", start=_t_parallel, end=_t_embed_done)
+        else:
+            intent_result = ic.classify_intent(query.strip(), llm, config, mode)
+            mark("2_query_rewrite")
+            query_vec = embedder.embed(query.strip())
+            mark("3_query_embedding")
 
         rewritten = intent_result.rewritten
         queries   = intent_result.queries
         print(f"[pipeline]  mode={mode}  rewritten={rewritten!r}  queries={list(queries)}", flush=True)
-        mark("2_query_rewrite",   start=_t_parallel, end=_t_rewrite_done)
-        mark("3_query_embedding", start=_t_parallel, end=_t_embed_done)
 
         # ============ Stage 4: query_memory_lookup & CACHE HIT detection
         # Check cache before entity detection — on a hit we skip to retreival of previous generated query

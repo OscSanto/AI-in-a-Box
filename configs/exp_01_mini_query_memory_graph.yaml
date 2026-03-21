@@ -138,6 +138,11 @@ query_memory_graph:
 #  compare_reuse_vs_full_pipeline_latency: true
 #  output_dir: "./runs/exp_minimal_kiwix_memory_graph"
 
+pipeline:
+  parallel_stages_2_3: true   # USED — config.pipeline_parallel_stages_2_3
+                               # true  = rewrite + embed run in parallel (faster, overlapping timings)
+                               # false = run sequentially (accurate per-stage timings)
+
 server:
   port: 5050          # USED — config.server_port
   host: "0.0.0.0"    # USED — config.server_host

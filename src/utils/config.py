@@ -96,6 +96,9 @@ class Config:
     inference_default_mode: str = "server"   # "server" or "client"
     inference_allow_user_toggle: bool = True
 
+    # Pipeline
+    pipeline_parallel_stages_2_3: bool = True  # True = rewrite+embed in parallel; False = sequential (accurate timings)
+
     # Server
     server_port: int = 5050
     server_host: str = "0.0.0.0"
@@ -131,6 +134,7 @@ def config_from_dict(d: dict) -> Config:
     qmg_sim = qmg.get("similarity_search", {})
     qmg_thresh = qmg_sim.get("thresholds", {})
 
+    pipeline_cfg = d.get("pipeline", {})
     server = d.get("server", {})
     ner = d.get("ner", {})
     query_rewrite = d.get("query_rewrite", {})
@@ -183,6 +187,7 @@ def config_from_dict(d: dict) -> Config:
         entity_llm_mode=ner.get("llm_extraction_mode", "server"),
         inference_default_mode=inference.get("default_mode", "server"),
         inference_allow_user_toggle=inference.get("allow_user_toggle", True),
+        pipeline_parallel_stages_2_3=pipeline_cfg.get("parallel_stages_2_3", True),
         server_port=server.get("port", 5050),
         server_host=server.get("host", "0.0.0.0"),
         data_dir=storage.get("data_dir", default_data_dir),
