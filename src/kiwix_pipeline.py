@@ -1,22 +1,12 @@
-import json
-import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Iterator
-
-import numpy as np
 
 import retrieval.kiwix_client as kiwix
-import retrieval.chunk_ranker as ranker
-
-from retrieval import intent_classifier as ic
-from retrieval.kiwix_client import parallel_search, _is_junk_title
-from retrieval.entity_store import (
-    DynamicEntityStore,
-    detect_subtopic_label,
-    expand_entity_list, learn_from_articles,
-)
+import retrieval.rerank as ranker
+import retrieval.intent_classifier as ic
+import retrieval.entity_store as entities
+import ingest.article_cleaner as cleaner
 
 """
 https://en.wikipedia.org/wiki/Entity_linking?
@@ -123,7 +113,7 @@ class Pipeline:
               This is an optimization to save time on repeated or very similar queries.
             Cache hit detection considers only past queries from the same ZIM (if zim_meta is provided) to improve relevance.
 
-            ON CACHE HIT: return immediately and skip all subsequent stages. Include cache_hit=True and the cached_answer in the return dict.
+            ON CACHE HIT: return immediately and skip all subsequent stages. Includes cache_hit=True and the cached_answer in the return dict.
 
             ISSUES: If the user asks the same question twice but with different wording, we might miss the cache hit due to embedding differences. 
                 Future improvement could include a more robust similarity check or query normalization.
@@ -162,9 +152,9 @@ class Pipeline:
         TODO: Expand entity store with aliases learned from article intros (e.g. "also known as" phrases), not just past queries.
         TODO: Expand entity store using disambiguation pages — if we detect a disambiguation page for a term, we can add all the listed candidates as aliases for that term.
         """
-        entity_store    = DynamicEntityStore(config.data_dir)
-        query_subtopic  = detect_subtopic_label(query)
-        expanded_entities = expand_entity_list(entity_store, query, rewritten, intent_result.entities)
+        entity_store    = entities.DynamicEntityStore(config.data_dir)
+        query_subtopic  = entities.detect_subtopic_label(query)
+        expanded_entities = entities.expand_entity_list(entity_store, query, rewritten, intent_result.entities)
         parent_hint     = rewritten if rewritten else (queries[0] if queries else query)
         store_subtopics = entity_store.subtopic_candidates(parent_hint, topk=3)
         mark(f"5a_entity_expand — {len(expanded_entities)} entities")
@@ -184,7 +174,7 @@ class Pipeline:
                 if q and q not in all_terms:
                     all_terms.append(q)
 
-            kiwix_results, seen_titles = parallel_search(
+            kiwix_results, seen_titles = kiwix.parallel_search(
                 config.kiwix_endpoint, config.zim_content_id,
                 entity_list, all_terms, config.kiwix_result_limit,
             )
@@ -212,7 +202,7 @@ class Pipeline:
         with ThreadPoolExecutor(max_workers=8) as _ex:
             fetched = list(_ex.map(_fetch_sections, _fetch_candidates))
 
-        sections_by_title = learn_from_articles(entity_store, fetched)
+        sections_by_title = entities.learn_from_articles(entity_store, fetched)
         mark(f"6b_entity_store_learn — {len(sections_by_title)} articles observed")
 
         # ── Stage 6: article selection (threshold filter + disambiguation filter + slice)
@@ -240,7 +230,7 @@ class Pipeline:
                     for r in kiwix.search_kiwix(config.kiwix_endpoint, config.zim_content_id, cand, 3):
                         title = r["title"].strip()
                         if (title not in seen_titles and len(title) > 2
-                                and any(c.isalpha() for c in title) and not _is_junk_title(title)):
+                                and any(c.isalpha() for c in title) and not cleaner.is_junk_title(title)):
                             kiwix_results.append(r)
                             seen_titles.add(title)
                     if kiwix_results:
@@ -257,18 +247,6 @@ class Pipeline:
         # Sentence overlap respects boundaries by construction — no mid-sentence cutoff.
         # Disabled when overlap_tokens = 0 in config.
         USE_OVERLAP = config.chunk_overlap_tokens > 0
-
-        _SENT_SPLIT = re.compile(r'(?<=[.!?])\s+(?=[A-Z])')
-
-        def _last_sentence(text: str) -> str:
-            """Last sentence of a paragraph."""
-            parts = _SENT_SPLIT.split(text.strip())
-            return parts[-1].strip() if parts else ""
-
-        def _first_sentence(text: str) -> str:
-            """First sentence of a paragraph."""
-            parts = _SENT_SPLIT.split(text.strip())
-            return parts[0].strip() if parts else ""
 
         # Proportional chunk budget: top-scoring article gets max_chunks_per_article,
         # others scale down relative to it. Floor of 2 so every article contributes
@@ -303,8 +281,8 @@ class Pipeline:
             for i, (section, para) in enumerate(all_paras):
                 if art_chunk_count >= art["_chunk_budget"]:
                     break
-                left  = (_last_sentence(all_paras[i - 1][1]) + " ") if i > 0 and USE_OVERLAP else ""
-                right = (" " + _first_sentence(all_paras[i + 1][1])) if i < len(all_paras) - 1 and USE_OVERLAP else ""
+                left  = (cleaner.last_sentence(all_paras[i - 1][1]) + " ") if i > 0 and USE_OVERLAP else ""
+                right = (" " + cleaner.first_sentence(all_paras[i + 1][1])) if i < len(all_paras) - 1 and USE_OVERLAP else ""
                 rank_chunk = f"[{title} | {section}]\n{left}{para}{right}"
                 if len(rank_chunk) >= config.min_paragraph_chars:
                     article_chunks.append(rank_chunk)

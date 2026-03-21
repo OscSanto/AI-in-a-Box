@@ -3,7 +3,6 @@ import os
 import sys
 import time
 import uuid
-
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, FileResponse
@@ -25,6 +24,8 @@ from runner import Runner
 
 app = FastAPI()
 
+
+
 # webui/models
 WEBUI_DIR = os.path.join(os.path.dirname(__file__), "..", "webui")
 app.mount("/_app",    StaticFiles(directory=os.path.join(WEBUI_DIR, "_app")),    name="static")
@@ -44,7 +45,9 @@ LOCAL_PATHS = {"/", "/health", "/props", "/admin", "/admin/reset-cache", "/v1/mo
                "/config", "/context", "/remember", "/relations",
                "/webgpu-interceptor.js"}
 
-
+# ----- Initialize global components -----
+#config.kiwix_endpoint is probed and updated to correct URL. Verifies and configures kiwix_endpoint for the rest of the app lifecycle.
+    #dependent on IIAB on android or not.
 _config.kiwix_endpoint = kiwixClient.probe_kiwix_endpoint(_config.kiwix_endpoint, _config.zim_content_id)
 _zim_meta = kiwixClient.get_zim_metadata(_config.kiwix_endpoint, _config.zim_content_id)
 
@@ -363,4 +366,4 @@ if __name__ == "__main__":
 
     host = _config.server_host
     port = _config.server_port
-    uvicorn.run("main:app", host=host, port=port, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="info")

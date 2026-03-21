@@ -4,19 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, quote
 from bs4 import BeautifulSoup
 
-from ingest.article_cleaner import JUNK
-
-def is_kiwix_url(url: str, kiwix_endpoint: str) -> bool:
-    """
-    Returns True if the URL points to this server's Kiwix content path.
-    Used by pipeline to decide whether to fetch a wiki_url article locally.
-    """
-    try:
-        ep = urlparse(kiwix_endpoint)
-        u  = urlparse(url)
-        return ep.netloc == u.netloc and "/kiwix/content/" in u.path
-    except Exception:
-        return False
+from ingest.article_cleaner import JUNK, merge_paragraphs, is_junk_title
 
 
 """
@@ -67,7 +55,7 @@ def _get(url: str, timeout: int):
 
 
 def get_zim_metadata(kiwix_endpoint: str, zim_id: str) -> dict:
-    fallback = {"zim_id": zim_id, "zim_label": None}
+    fallback = {"zim_id": zim_id, "zim_label": zim_id}
 
     try:
         parsed = urlparse(kiwix_endpoint)
@@ -92,7 +80,7 @@ def get_zim_metadata(kiwix_endpoint: str, zim_id: str) -> dict:
             return fallback
 
         title_tag = entry.find("title")
-        label = title_tag.get_text(strip=True) if title_tag else None
+        label = title_tag.get_text(strip=True) if title_tag else zim_id
         return {"zim_id": zim_id, "zim_label": label}
 
     except Exception as e:
@@ -188,25 +176,7 @@ def fetch_article_sections(url: str, max_chunk_chars: int = 800) -> list:
             # stores copy of current_paragraphs, then clears buffer for next section
             sections.append({"section": current_section, "paragraphs": list(current_paragraphs)}) 
 
-    def _merge_into_chunks(raw_paras: list) -> list:
-    #Merge consecutive short paragraphs up to config.max_chunk_chars
-    # Merge smaller sentences to consectuive ones < config.max_chunks_chars
-        chunks = []
-        buf = ""
-        # Note: some articles have very short paragraphs (e.g. lists, captions) that are too small for BM25 to work with.  
-        # Merge these into larger chunks up to max_chunk_chars.
-        for p in raw_paras:
-            if buf and len(buf) + 1 + len(p) > max_chunk_chars: # flush buffer if adding the next paragraph would exceed the char limit
-                chunks.append(buf)
-                buf = p
-            else:
-                
-                buf = (buf + " " + p).strip() if buf else p
-        # remainder  
-        if buf:
-            chunks.append(buf) 
-        return chunks
-    #iterator: only through headings and paragraphs. Ignore lists, images, etc. 
+    #iterator: only through headings and paragraphs. Ignore lists, images, etc.
     #TODO: Consider saving images, tables for display
 
     for el in body.find_all(["h2", "h3", "h4", "p"]):
@@ -231,26 +201,11 @@ def fetch_article_sections(url: str, max_chunk_chars: int = 800) -> list:
 
     # Merge short paragraphs within each section into larger chunks
     for sec in sections:
-        sec["paragraphs"] = _merge_into_chunks(sec["paragraphs"])
+        sec["paragraphs"] = merge_paragraphs(sec["paragraphs"], max_chunk_chars)
 
     return sections
 
 
-_JUNK_TITLE_PREFIXES = (
-    "list of", "outline of", "index of", "glossary of",
-    "portal:", "wikipedia:", "template:", "category:", "help:",
-)
-_JUNK_TITLE_SUFFIXES = (
-    "(disambiguation)",
-)
-
-def _is_junk_title(title: str) -> bool:
-    t = title.lower().strip()
-    if any(t.startswith(p) for p in _JUNK_TITLE_PREFIXES):
-        return True
-    if any(t.endswith(s) for s in _JUNK_TITLE_SUFFIXES):
-        return True
-    return False
 
 
 def parallel_search(endpoint: str, zim_id: str, entity_list: list, all_terms: list,
@@ -274,7 +229,7 @@ def parallel_search(endpoint: str, zim_id: str, entity_list: list, all_terms: li
                 and len(title) > 2
                 and not title.isdigit()
                 and any(c.isalpha() for c in title)
-                and not _is_junk_title(title)):
+                and not is_junk_title(title)):
             results.append(r)
             seen_titles.add(title)
 

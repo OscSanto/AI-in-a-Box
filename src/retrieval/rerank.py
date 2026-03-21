@@ -1,6 +1,7 @@
 import re
 import numpy as np
 from rank_bm25 import BM25Okapi
+from ingest.article_cleaner import JUNK_SECTIONS as _JUNK_SECTIONS
 
 """
     Rank chunks in three stages and return the top_k best.
@@ -56,17 +57,12 @@ Query: Tell me about Boston's history.
 
 # https://github.com/ev2900/BM25_Search_Example
 
-# Sections that add no useful content regardless of query
-# Penalty multiplier applied to chunks from these sections,
+# Penalty multiplier applied to chunks from junk sections
 _JUNK_PENALTY  = 0.3   # replaces the multiplier for junk sections
 
 # Deduplication: chunks whose body text overlaps above this Jaccard threshold
 # with an already-selected chunk are dropped.  0.6 = 60% token overlap.
 _DEDUP_THRESHOLD = 0.6
-_JUNK_SECTIONS = {
-    "see also", "references", "further reading", "external links",
-    "notes", "footnotes", "bibliography", "trivia", "citations",
-}
 
 # Section bias controls how much the section name's relevance scales the score.
 #   final_score = cosine(chunk, query) * (1.0 + ALPHA * cosine(section, query))
@@ -86,9 +82,14 @@ def _body(chunk: str) -> str:
     """Chunk text with the '[Title | Section]' header line stripped."""
     return chunk.split("\n", 1)[1] if "\n" in chunk else chunk
 
-
-def _jaccard(a: str, b: str) -> float:
-    """Token-level Jaccard similarity between two strings."""
+# Measures degree of overlap between two texts.
+# Deduplication filter to skip chunks too similar.
+def _chunk_overlap(a: str, b: str) -> float:
+    """Neat! Jaccard!
+    Measures similarity between two sets.
+    J(A,B) = |A ∩ B| / |A ∪ B|
+    Range [0, 1], where 0 means no overlap and 1 means identical sets.
+    """
     ta = set(a.lower().split())
     tb = set(b.lower().split())
     if not ta or not tb:
@@ -162,11 +163,23 @@ def rerank_by_title(results: list, queries: list, entities: list, rewritten: str
         return set(re.sub(r"[^\w\s]", " ", text.lower()).split())
 
     ref_tokens: set = set()
-    for t in list(queries) + list(entities):
+    for t in list(queries):
         ref_tokens.update(_tok(t))
 
     normalized_rewritten = " ".join(re.sub(r"[^\w\s]", " ", rewritten.lower()).split())
 
+    """"
+    score = (overlap / len(ref_tokens)) - (0.4 * missing / len(ref_tokens)) - (0.2 * extra / len(title_tokens)) + (0.25 if title matches rewritten else 0)
+    where:
+    - overlap = number of tokens in both title and reference
+    - missing = number of tokens in reference but not in title
+    - extra   = number of tokens in title but not in reference
+    - len(ref_tokens) = total number of tokens in reference (for normalization)
+    - len(title_tokens) = total number of tokens in title (for normalization)
+    - The final term adds a small boost if the title matches the rewritten query, as an
+
+    exact match is a strong signal of relevance.
+    """
     def _score(title: str) -> float:
         title_tokens = _tok(title)
         overlap  = ref_tokens & title_tokens
@@ -207,15 +220,17 @@ def rank_chunks(query: str, chunks: list, top_k: int, embedder=None, query_vec=N
 
         ranked = sorted(range(len(pool)), key=lambda i: scores[i], reverse=True)
 
-        # Stage D: deduplication — greedily select chunks, skipping any whose
-        # body text overlaps too heavily with an already-selected chunk.
+        # Stage D: deduplication
+        # skip body text overlaps too heavily with an already selected chunk.
         selected        = []
         selected_bodies = []
         for i in ranked:
             body = _body(pool[i])
-            if any(_jaccard(body, sb) >= _DEDUP_THRESHOLD for sb in selected_bodies):
+            # If this chunk's body text overlaps too much with any already-selected chunk, skip it.
+            if any(_chunk_overlap(body, sb) >= _DEDUP_THRESHOLD for sb in selected_bodies):
                 print(f"  [ranker skip] dedup  score={scores[i]:.4f}  section='{_get_section(pool[i])}'", flush=True)
                 continue
+
             selected.append(pool[i])
             selected_bodies.append(body)
             print(f"  [ranker {len(selected):02d}] score={scores[i]:.4f}  section='{_get_section(pool[i])}'", flush=True)
