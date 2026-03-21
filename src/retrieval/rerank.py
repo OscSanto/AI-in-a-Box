@@ -72,6 +72,12 @@ _SECTION_ALPHA = 0.3   # tune this to increase/decrease the impact of section re
 _HEADER_RE = re.compile(r"^\[([^\|]+)\|([^\]]+)\]")
 
 
+def _get_title(chunk: str) -> str:
+    """Extract article title from '[Title | Section]' chunk header."""
+    m = _HEADER_RE.match(chunk)
+    return m.group(1).strip() if m else ""
+
+
 def _get_section(chunk: str) -> str:
     """Extract section name from '[Title | Section]' chunk header."""
     m = _HEADER_RE.match(chunk)
@@ -199,7 +205,8 @@ def rerank_by_title(results: list, queries: list, entities: list, rewritten: str
     return results
 
 
-def rank_chunks(query: str, chunks: list, top_k: int, embedder=None, query_vec=None) -> list:
+def rank_chunks(query: str, chunks: list, top_k: int, embedder=None, query_vec=None,
+                title_scores: dict = None) -> list:
     
     if not chunks:
         print("[ranker] no chunks to rank", flush=True)
@@ -216,7 +223,8 @@ def rank_chunks(query: str, chunks: list, top_k: int, embedder=None, query_vec=N
     try:
         cos    = _cosineScorePass(pool, query_vec, embedder) # param: list of chunks after BM25, returns cosine similarity scores
         mults  = _section_multipliers(pool, query_vec, embedder) # param: same list of chunks, returns multipliers based on section relevance
-        scores = [float(cos[i]) * mults[i] for i in range(len(pool))]
+        title_w = [title_scores.get(_get_title(c), 1.0) for c in pool] if title_scores else [1.0] * len(pool)
+        scores = [float(cos[i]) * mults[i] * title_w[i] for i in range(len(pool))]
 
         ranked = sorted(range(len(pool)), key=lambda i: scores[i], reverse=True)
 

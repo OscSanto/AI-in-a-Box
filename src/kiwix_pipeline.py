@@ -323,7 +323,9 @@ class Pipeline:
         # Single-entity queries: rank against rewritten (focused Wikipedia title).
         if article_chunks:
             rank_query = query if len(intent_result.entities) > 1 else rewritten
-            top_chunks = ranker.rank_chunks(rank_query, article_chunks, config.topk_chunks, embedder, query_vec)
+            title_scores = {r["title"]: r.get("_title_score", 1.0) for r in kiwix_results}
+            top_chunks = ranker.rank_chunks(rank_query, article_chunks, config.topk_chunks, embedder, query_vec,
+                                            title_scores=title_scores)
             # Restore document order so context reads coherently (ranking selects, order presents)
             order_map = {c: i for i, c in enumerate(article_chunks)}
             top_chunks.sort(key=lambda c: order_map.get(c, 0))

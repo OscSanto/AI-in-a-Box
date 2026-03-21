@@ -21,8 +21,10 @@ import retrieval.kiwix_client as kiwixClient
 from graphs.content_graph import ContentGraph
 from graphs.query_memory import QueryMemory
 from runner import Runner
+from routers import metrics as metrics_router
 
 app = FastAPI()
+app.include_router(metrics_router.router)
 
 
 
@@ -43,7 +45,7 @@ OLLAMA_SERVER_URL = "http://localhost:11434"
 # The webui and our applications PATHS used via FastAPI server
 LOCAL_PATHS = {"/", "/health", "/props", "/admin", "/admin/reset-cache", "/v1/models", "/v1/chat/completions",
                "/config", "/context", "/remember", "/relations",
-               "/webgpu-interceptor.js"}
+               "/webgpu-interceptor.js", "/api/metrics"}
 
 # ----- Initialize global components -----
 #config.kiwix_endpoint is probed and updated to correct URL. Verifies and configures kiwix_endpoint for the rest of the app lifecycle.
