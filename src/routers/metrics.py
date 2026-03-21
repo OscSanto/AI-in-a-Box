@@ -71,40 +71,51 @@ def _temperatures() -> list[dict]:
     """Returns all available sensor readings — CPU, NVMe, battery, etc."""
     try:
         sensors = psutil.sensors_temperatures()
-    except AttributeError:
-        return []   # Windows / unsupported platform
+    except Exception:
+        return []   # Android / Windows / unsupported platform
     out = []
-    for chip, entries in sensors.items():
+    for chip, entries in (sensors or {}).items():
         for e in entries:
-            out.append({
-                "chip":    chip,
-                "label":   e.label or chip,
-                "current": e.current,
-                "high":    e.high,
-                "critical": e.critical,
-            })
+            try:
+                out.append({
+                    "chip":     chip,
+                    "label":    e.label or chip,
+                    "current":  e.current,
+                    "high":     e.high,
+                    "critical": e.critical,
+                })
+            except Exception:
+                pass
     return out
 
 
 def _network() -> list[dict]:
-    stats = psutil.net_io_counters(pernic=True)
-    addrs = psutil.net_if_addrs()
-    out   = []
+    try:
+        stats = psutil.net_io_counters(pernic=True) or {}
+        addrs = psutil.net_if_addrs() or {}
+    except Exception:
+        return []
+    # AF_INET is always 2; use the integer to avoid enum differences on Android
+    AF_INET = 2
+    out = []
     for iface, io in stats.items():
-        ipv4 = next(
-            (a.address for a in addrs.get(iface, []) if a.family.name == "AF_INET"),
-            None,
-        )
-        out.append({
-            "iface":      iface,
-            "ipv4":       ipv4,
-            "sent_mb":    round(io.bytes_sent / 1024**2, 1),
-            "recv_mb":    round(io.bytes_recv / 1024**2, 1),
-            "packets_sent": io.packets_sent,
-            "packets_recv": io.packets_recv,
-            "errors_in":  io.errin,
-            "errors_out": io.errout,
-        })
+        try:
+            ipv4 = next(
+                (a.address for a in addrs.get(iface, []) if a.family == AF_INET),
+                None,
+            )
+            out.append({
+                "iface":        iface,
+                "ipv4":         ipv4,
+                "sent_mb":      round(io.bytes_sent / 1024**2, 1),
+                "recv_mb":      round(io.bytes_recv / 1024**2, 1),
+                "packets_sent": io.packets_sent,
+                "packets_recv": io.packets_recv,
+                "errors_in":    io.errin,
+                "errors_out":   io.errout,
+            })
+        except Exception:
+            pass
     # Sort: loopback last, highest-traffic first
     out.sort(key=lambda x: (x["iface"].startswith("lo"), -(x["sent_mb"] + x["recv_mb"])))
     return out
@@ -153,15 +164,23 @@ def _gpu() -> dict | None:
         return None
 
 
+def _safe(fn, fallback=None):
+    try:
+        return fn()
+    except Exception as e:
+        print(f"[metrics] {fn.__name__} failed: {e}", flush=True)
+        return fallback
+
+
 @router.get("/api/metrics")
 def get_metrics():
     return {
-        "uptime_s":   round(time.time() - _BOOT_TIME),
-        "cpu":        _cpu(),
-        "memory":     _memory(),
-        "disk":       _disk(),
-        "temperatures": _temperatures(),
-        "network":    _network(),
-        "process":    _process(),
-        "gpu":        _gpu(),
+        "uptime_s":     round(time.time() - _BOOT_TIME),
+        "cpu":          _safe(_cpu, {}),
+        "memory":       _safe(_memory, {}),
+        "disk":         _safe(_disk, {}),
+        "temperatures": _safe(_temperatures, []),
+        "network":      _safe(_network, []),
+        "process":      _safe(_process, {}),
+        "gpu":          _safe(_gpu),
     }
