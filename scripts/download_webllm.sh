@@ -34,7 +34,10 @@ if command -v npm &>/dev/null; then
     # Use npm to get the exact package, then copy dist/
     TMP_DIR=$(mktemp -d)
     npm install --prefix "$TMP_DIR" @mlc-ai/web-llm --no-save --silent
-    cp -r "$TMP_DIR/node_modules/@mlc-ai/web-llm/dist/." "$WEBLLM_DIR/"
+    PKG="$TMP_DIR/node_modules/@mlc-ai/web-llm"
+    SRC=$([ -d "$PKG/dist" ] && echo "$PKG/dist" || ([ -d "$PKG/lib" ] && echo "$PKG/lib" || echo "$PKG"))
+    mkdir -p "$WEBLLM_DIR"
+    cp -r "$SRC/." "$WEBLLM_DIR/"
     rm -rf "$TMP_DIR"
     echo "    WebLLM JS installed from npm."
 else
