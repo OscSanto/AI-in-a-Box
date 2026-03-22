@@ -51,7 +51,7 @@ class Config:
 
     # Chunking
     chunk_size_tokens: int = 512
-    chunk_overlap_tokens: int = 96
+    chunk_overlap_enabled: bool = True
     max_articles_to_chunk: int = 3
     max_chunks_per_article: int = 15       # hard cap on chunks per article (top-scoring article)
     title_score_threshold: float = 0.3    # articles below this title-rank score are dropped
@@ -61,6 +61,7 @@ class Config:
 
     # Chunk ranking
     topk_chunks: int = 8
+    topk_chunks_longform: int = 20   # used when style="long_form"
 
     # Content graph
     content_graph_enabled: bool = True
@@ -160,7 +161,7 @@ def config_from_dict(d: dict) -> Config:
         llm_backend=llm.get("backend", "ollama"),
         llm_max_tokens=llm.get("max_new_tokens", 256),
         chunk_size_tokens=chunking.get("chunk_tokens", 512),
-        chunk_overlap_tokens=chunking.get("overlap_tokens", 0),
+        chunk_overlap_enabled=chunking.get("overlap_enabled", True),
         max_articles_to_chunk=chunking.get("max_articles_to_chunk", 3),
         max_chunks_per_article=chunking.get("max_chunks_per_article", 15),
         title_score_threshold=chunking.get("title_score_threshold", 0.3),

@@ -246,7 +246,7 @@ class Pipeline:
         # Each chunk: last sentence of previous paragraph + this paragraph + first sentence of next.
         # Sentence overlap respects boundaries by construction — no mid-sentence cutoff.
         # Disabled when overlap_tokens = 0 in config.
-        USE_OVERLAP = config.chunk_overlap_tokens > 0
+        USE_OVERLAP = config.chunk_overlap_enabled
 
         # Proportional chunk budget: top-scoring article gets max_chunks_per_article,
         # others scale down relative to it. Floor of 2 so every article contributes

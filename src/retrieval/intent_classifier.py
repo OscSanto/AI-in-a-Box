@@ -18,31 +18,46 @@ from dataclasses import dataclass
 @dataclass
 class IntentResult:
     mode:      str        # "kiwix" | "chat" | "summarize" | "wiki_url"
+    style:     str        # "concise" | "long_form" | "bullet" | "eli5" | "step_by_step"
     queries:   list[str]  # Wikipedia-style search terms (kiwix only)
     rewritten: str        # single best Wikipedia title  (kiwix only)
     entities:  list[str]  # named entities for entity search
 
 
 
-def _kiwix_prompt(query: str, max_queries: int, max_entities: int) -> str:
-    return f"""Rewrite the message into Wikipedia search terms.
+def _kiwix_prompt(query: str, max_queries: int, max_entities: int, intents: list) -> str:
+    mode_lines = "\n".join(f'    "{i["name"]}" — {i["description"]}' for i in intents)
+    mode_names = "|".join(i["name"] for i in intents)
+    return f"""Classify the message and rewrite it into Wikipedia search terms.
 
 Return exactly one JSON object:
 {{
+  "mode": "<{mode_names}>",
+  "style": "<concise|long_form|bullet|eli5|step_by_step>",
   "queries": ["term1", "term2"],
   "rewritten": "<primary Wikipedia title>",
   "entities": ["Entity Name"]
 }}
 
-- "queries": up to {max_queries} short Wikipedia-style search terms
-- "rewritten": the single best Wikipedia article title
+- "mode": what kind of request this is
+{mode_lines}
+
+- "style": how the user wants the answer delivered
+    "concise"      — short factual answer (default for most questions)
+    "long_form"    — essay, multiple paragraphs, or pages of detail requested
+    "bullet"       — user asked for a list, bullet points, or key points
+    "eli5"         — explain simply, like I'm 5, beginner-friendly
+    "step_by_step" — how-to, instructions, or process explanation
+
+- "queries": up to {max_queries} short Wikipedia-style search terms (kiwix mode only)
+- "rewritten": the single best Wikipedia article title (kiwix mode only)
 - "entities": up to {max_entities} exact article titles named in the message
 
 Formatting: noun phrases, 1-3 words, no question words, no verbs, preserve full names.
 
 Example:
 User: tell me about new york
-{{"queries": ["New York"], "rewritten": "New York", "entities": ["New York City", "New York (state)"]}}
+{{"mode": "kiwix", "style": "concise", "queries": ["New York"], "rewritten": "New York", "entities": ["New York City", "New York (state)"]}}
 
 Message: {query.strip()}
 JSON:"""
@@ -88,6 +103,7 @@ def _fallback(query: str) -> IntentResult:
     """Used on any LLM failure — treats the raw query as a kiwix lookup."""
     return IntentResult(
         mode="kiwix",
+        style="concise",
         queries=[query.strip()],
         rewritten=query.strip(),
         entities=[],
@@ -112,7 +128,8 @@ def classify_intent(query: str, llm, config, mode: str = "kiwix") -> IntentResul
 
     # Only kiwix mode is supported for now. routing to other modes is not yet implemented (see runner.py).
     if mode == "kiwix":
-        prompt = _kiwix_prompt(query, config.kiwix_max_queries, config.kiwix_max_entities)
+        prompt = _kiwix_prompt(query, config.kiwix_max_queries, config.kiwix_max_entities,
+                               config.intent_classifier_intents)
 
     else: 
         return _fallback(query) # For now, if not kiwix mode, skip intent classification and route directly to fallback (kiwix retrieval with raw query
@@ -125,7 +142,7 @@ def classify_intent(query: str, llm, config, mode: str = "kiwix") -> IntentResul
             config.llm_utility_model,
             [{"role": "user", "content": prompt}],
             temperature=0.0,
-            max_tokens=150,
+            max_tokens=200,
         )
 
         raw = re.sub(r"```json|```", "", raw).strip()
@@ -133,15 +150,23 @@ def classify_intent(query: str, llm, config, mode: str = "kiwix") -> IntentResul
         if not m:
             raise ValueError("no JSON object in response")
         data = json.loads(m.group())
-        print(f"[intent] {json.dumps(data)}", flush=True)
+        _VALID_MODES  = {i["name"] for i in config.intent_classifier_intents}
+        _VALID_STYLES = {"concise", "long_form", "bullet", "eli5", "step_by_step"}
 
-    
-        if mode == "kiwix":
-            result_mode = "kiwix"
-        else:
-            result_mode = data.get("mode", "kiwix")
-            if float(data.get("confidence", 0.5)) < 0.5:
-                result_mode = "kiwix"
+        detected_mode = data.get("mode", "kiwix")
+        if detected_mode not in _VALID_MODES:
+            detected_mode = "kiwix"
+
+        result_style = data.get("style", "concise")
+        if result_style not in _VALID_STYLES:
+            result_style = "concise"
+
+        # Routing not yet wired — always execute as kiwix regardless of detected mode.
+        # detected_mode is logged so we can observe LLM classifications before enabling routing.
+        result_mode = "kiwix"
+
+        print(f"[intent] detected=({detected_mode}, {result_style})  routing→{result_mode}", flush=True)
+        print(f"[intent] {json.dumps(data)}", flush=True)
 
         # ===== Queries 
         raw_terms = data.get("queries") or []
@@ -196,6 +221,7 @@ def classify_intent(query: str, llm, config, mode: str = "kiwix") -> IntentResul
 
         return IntentResult(
             mode=result_mode,
+            style=result_style,
             queries=queries,
             rewritten=rewritten,
             entities=entities,
