@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Search, SquarePen, X } from '@lucide/svelte';
+	import { Search, SquarePen, X, Network, Activity } from '@lucide/svelte';
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -76,6 +76,30 @@
 			</div>
 
 			<KeyboardShortcutInfo keys={['cmd', 'k']} />
+		</Button>
+
+		<Button
+			class="w-full justify-start"
+			href="#/visual"
+			onclick={handleMobileSidebarItemClick}
+			variant="ghost"
+		>
+			<div class="flex items-center gap-2">
+				<Network class="h-4 w-4" />
+				Knowledge Graph
+			</div>
+		</Button>
+
+		<Button
+			class="w-full justify-start"
+			href="#/metrics"
+			onclick={handleMobileSidebarItemClick}
+			variant="ghost"
+		>
+			<div class="flex items-center gap-2">
+				<Activity class="h-4 w-4" />
+				Metrics
+			</div>
 		</Button>
 	{/if}
 </div>

@@ -46,7 +46,7 @@ chunking:
   # NOT USED — enabled and split_by not read by config.py
   #enabled: true
   #split_by: paragraph
-  overlap_tokens: 75            # USED — config.chunk_overlap_tokens (chars appended from adjacent paragraphs; 0 = off)
+  overlap_enabled: true         # USED — config.chunk_overlap_enabled (prepend last sentence of prev para + append first sentence of next; false = off)
   max_articles_to_chunk: 5     # USED — config.max_articles_to_chunk (per entity)
   max_chunks_per_article: 10   # USED — config.max_chunks_per_article (top-scoring article gets this many chunks)
   title_score_threshold: 0.3  # USED — config.title_score_threshold (drop articles below this title-rank score)
@@ -139,7 +139,7 @@ query_memory_graph:
 #  output_dir: "./runs/exp_minimal_kiwix_memory_graph"
 
 pipeline:
-  parallel_stages_2_3: true   # USED — config.pipeline_parallel_stages_2_3
+  parallel_stages_2_3: false   # USED — config.pipeline_parallel_stages_2_3
                                # true  = rewrite + embed run in parallel (faster, overlapping timings)
                                # false = run sequentially (accurate per-stage timings)
 
@@ -181,6 +181,10 @@ intent_classifier:
     - name: chat
       description: "Greeting, casual conversation, or non-retrieval question that needs no knowledge-base lookup"
       enabled: true
+
+    - name: pdf
+      description: "User submitted or referenced a PDF document and wants to query or discuss its contents"
+      enabled: false
 
 # RELATION EXTRACTION (LLM extracts entity→relation→entity triples from chunks into content graph)
 ner:
