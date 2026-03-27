@@ -157,10 +157,6 @@
 </div>
 
 <style>
-	:global(body) {
-		background: #070d14 !important;
-	}
-
 	.graph-container {
 		position: fixed;
 		inset: 0;
@@ -206,27 +202,27 @@
 	}
 
 	.back-btn {
-		color: #ccd;
+		color: var(--card-foreground);
 		text-decoration: none;
-		background: rgba(0, 0, 0, 0.65);
+		background: var(--card);
 		padding: 6px 12px;
 		border-radius: 6px;
 		font-size: 13px;
 		font-family: sans-serif;
-		border: 1px solid rgba(255, 255, 255, 0.12);
+		border: 1px solid var(--border);
 	}
 
 	.back-btn:hover {
-		color: #fff;
-		border-color: rgba(255, 255, 255, 0.3);
+		color: var(--foreground);
+		border-color: var(--ring);
 	}
 
 	.stats {
-		background: rgba(0, 0, 0, 0.65);
-		border: 1px solid rgba(255, 255, 255, 0.1);
+		background: var(--card);
+		border: 1px solid var(--border);
 		border-radius: 6px;
 		padding: 8px 12px;
-		color: #889;
+		color: var(--muted-foreground);
 		font-size: 12px;
 		font-family: sans-serif;
 		display: flex;
@@ -234,11 +230,11 @@
 	}
 
 	.search-input {
-		background: rgba(0, 0, 0, 0.75);
-		border: 1px solid rgba(255, 255, 255, 0.18);
+		background: var(--card);
+		border: 1px solid var(--border);
 		border-radius: 6px;
 		padding: 7px 12px;
-		color: #eef;
+		color: var(--card-foreground);
 		font-size: 13px;
 		font-family: sans-serif;
 		outline: none;
@@ -246,7 +242,7 @@
 	}
 
 	.search-input::placeholder {
-		color: #556;
+		color: var(--muted-foreground);
 	}
 
 	.legend {
@@ -254,8 +250,8 @@
 		bottom: 16px;
 		right: 16px;
 		z-index: 10;
-		background: rgba(0, 0, 0, 0.65);
-		border: 1px solid rgba(255, 255, 255, 0.1);
+		background: var(--card);
+		border: 1px solid var(--border);
 		border-radius: 6px;
 		padding: 10px 14px;
 		display: flex;
@@ -266,7 +262,7 @@
 	}
 
 	.legend-title {
-		color: #667;
+		color: var(--muted-foreground);
 		font-size: 10px;
 		font-family: sans-serif;
 		text-transform: uppercase;
@@ -278,7 +274,7 @@
 		display: flex;
 		align-items: center;
 		gap: 7px;
-		color: #889;
+		color: var(--muted-foreground);
 		font-size: 11px;
 		font-family: sans-serif;
 	}

@@ -7,6 +7,58 @@
 (async function () {
   "use strict";
 
+  // ── Theme fix ─────────────────────────────────────────────────────────────────
+  // Problem 1: settings store writes localStorage["theme"] but mode-watcher reads
+  //            localStorage["mode-watcher-mode"] — they're disconnected.
+  // Problem 2: Android Chrome "Force Dark Mode" (chrome://flags) overrides CSS
+  //            dark/light classes entirely, ignoring mode-watcher.
+  // Fix: sync the two keys, and use `color-scheme: only light/dark` to block
+  //      Chrome's forced dark mode when the user has made an explicit choice.
+  (function patchThemeSync() {
+    function applyMode(mode) {
+      const html = document.documentElement;
+      if (mode === "light") {
+        html.classList.remove("dark");
+        html.style.colorScheme = "only light"; // blocks Chrome forced-dark
+      } else if (mode === "dark") {
+        html.classList.add("dark");
+        html.style.colorScheme = "only dark";
+      } else {
+        // "system" — follow OS preference, don't block forced-dark
+        const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        html.classList.toggle("dark", prefersDark);
+        html.style.colorScheme = prefersDark ? "dark" : "light";
+      }
+    }
+
+    const _set    = localStorage.setItem.bind(localStorage);
+    const _remove = localStorage.removeItem.bind(localStorage);
+
+    localStorage.setItem = function (key, value) {
+      _set(key, value);
+      if (key === "theme") {
+        const mode = value === "auto" ? "system" : value;
+        _set("mode-watcher-mode", mode);
+        applyMode(mode);
+      }
+    };
+
+    localStorage.removeItem = function (key) {
+      _remove(key);
+      if (key === "theme") {
+        _remove("mode-watcher-mode");
+        applyMode("system");
+      }
+    };
+
+    // Apply on page load from whichever key is already set
+    const stored = localStorage.getItem("mode-watcher-mode") || localStorage.getItem("theme");
+    if (stored) {
+      const mode = stored === "auto" ? "system" : stored;
+      applyMode(mode);
+    }
+  })();
+
   const WEBLLM_MODEL = "SmolLM2-360M-Instruct-q4f16_1-MLC";
   const WEBLLM_SRC   = "/webllm/webllm.js";
 

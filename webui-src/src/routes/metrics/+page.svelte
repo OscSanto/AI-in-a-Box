@@ -259,8 +259,8 @@
 <style>
 	.page {
 		min-height: 100vh;
-		background: #0a0f1a;
-		color: #ccd;
+		background: var(--background);
+		color: var(--foreground);
 		font-family: 'JetBrains Mono', 'Fira Code', monospace, sans-serif;
 		padding: 24px;
 	}
@@ -272,17 +272,17 @@
 		margin-bottom: 28px;
 	}
 
-	h1 { font-size: 18px; font-weight: 600; color: #eef; margin: 0; }
+	h1 { font-size: 18px; font-weight: 600; color: var(--foreground); margin: 0; }
 
 	.back {
-		color: #778;
+		color: var(--muted-foreground);
 		text-decoration: none;
 		font-size: 13px;
 		padding: 5px 10px;
-		border: 1px solid #223;
+		border: 1px solid var(--border);
 		border-radius: 6px;
 	}
-	.back:hover { color: #eef; border-color: #445; }
+	.back:hover { color: var(--foreground); border-color: var(--ring); }
 
 	.refresh-badge {
 		margin-left: auto;
@@ -301,8 +301,8 @@
 	}
 
 	.card {
-		background: #111820;
-		border: 1px solid #1e2a3a;
+		background: var(--card);
+		border: 1px solid var(--border);
 		border-radius: 10px;
 		padding: 18px;
 	}
@@ -312,24 +312,24 @@
 		font-size: 10px;
 		text-transform: uppercase;
 		letter-spacing: 0.1em;
-		color: #556;
+		color: var(--muted-foreground);
 		margin-bottom: 10px;
 	}
 
 	.big-num {
 		font-size: 38px;
 		font-weight: 700;
-		color: #eef;
+		color: var(--foreground);
 		line-height: 1;
 		margin-bottom: 10px;
 	}
 	.big-num.small { font-size: 28px; }
 
-	.unit { font-size: 16px; color: #667; margin-left: 2px; }
+	.unit { font-size: 16px; color: var(--muted-foreground); margin-left: 2px; }
 
 	.bar-track {
 		height: 6px;
-		background: #1e2a3a;
+		background: var(--muted);
 		border-radius: 3px;
 		overflow: hidden;
 		margin-bottom: 8px;
@@ -342,10 +342,10 @@
 		transition: width 0.4s ease;
 	}
 
-	.label { font-size: 11px; color: #556; margin-top: 4px; }
+	.label { font-size: 11px; color: var(--muted-foreground); margin-top: 4px; }
 	.mt4   { margin-top: 4px; }
 
-	.na { font-size: 24px; color: #445; margin: 8px 0; }
+	.na { font-size: 24px; color: var(--muted-foreground); margin: 8px 0; }
 
 	/* CPU mini bars */
 	.sub-row {
@@ -358,7 +358,7 @@
 	.core-bar {
 		flex: 1;
 		height: 100%;
-		background: #1e2a3a;
+		background: var(--muted);
 		border-radius: 2px;
 		display: flex;
 		align-items: flex-end;
@@ -369,26 +369,26 @@
 	/* Per-core detail */
 	.cores-detail { display: flex; flex-direction: column; gap: 6px; }
 	.core-row { display: flex; align-items: center; gap: 8px; }
-	.core-label { font-size: 10px; color: #556; width: 18px; flex-shrink: 0; }
-	.core-val { font-size: 11px; color: #778; width: 32px; text-align: right; flex-shrink: 0; }
+	.core-label { font-size: 10px; color: var(--muted-foreground); width: 18px; flex-shrink: 0; }
+	.core-val { font-size: 11px; color: var(--muted-foreground); width: 32px; text-align: right; flex-shrink: 0; }
 
 	/* Sensors */
 	.sensor-grid { display: flex; flex-direction: column; gap: 5px; }
 	.sensor-row { display: flex; align-items: baseline; gap: 8px; }
-	.sensor-label { font-size: 11px; color: #667; flex: 1; }
+	.sensor-label { font-size: 11px; color: var(--muted-foreground); flex: 1; }
 	.sensor-val { font-size: 13px; font-weight: 600; }
-	.sensor-limit { font-size: 10px; color: #445; }
+	.sensor-limit { font-size: 10px; color: var(--muted-foreground); }
 
 	/* Network */
 	.net-table { display: flex; flex-direction: column; gap: 6px; }
 	.net-row { display: flex; align-items: baseline; gap: 12px; font-size: 11px; flex-wrap: wrap; }
-	.net-iface { color: #aac; font-weight: 600; min-width: 60px; }
-	.net-ip { color: #556; }
-	.net-stat { color: #667; }
+	.net-iface { color: var(--foreground); font-weight: 600; min-width: 60px; }
+	.net-ip { color: var(--muted-foreground); }
+	.net-stat { color: var(--muted-foreground); }
 	.net-err { color: #ff6644; }
 
 	.loading, .error {
-		color: #556;
+		color: var(--muted-foreground);
 		font-size: 13px;
 		padding: 40px;
 		text-align: center;
