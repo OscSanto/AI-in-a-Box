@@ -22,9 +22,11 @@ from graphs.content_graph import ContentGraph
 from graphs.query_memory import QueryMemory
 from runner import Runner
 from routers import metrics as metrics_router
+from routers import models as models_router
 
 app = FastAPI()
 app.include_router(metrics_router.router)
+app.include_router(models_router.router)
 
 
 
@@ -46,6 +48,7 @@ OLLAMA_SERVER_URL = "http://localhost:11434"
 LOCAL_PATHS = {"/", "/health", "/props", "/admin", "/admin/reset-cache", "/v1/models", "/v1/chat/completions",
                "/config", "/context", "/remember", "/relations",
                "/webgpu-interceptor.js", "/api/metrics"}
+LOCAL_PREFIXES = ("/_app/", "/api/models")
 
 # ----- Initialize global components -----
 #config.kiwix_endpoint is probed and updated to correct URL. Verifies and configures kiwix_endpoint for the rest of the app lifecycle.
@@ -58,6 +61,13 @@ _content_graph = ContentGraph(_config, _embedder)
 _query_memory  = QueryMemory(_config, _embedder)
 
 _runner = Runner(_config, _embedder, llm, _content_graph, _query_memory)
+
+# ── Expose shared state to routers ─────────────────────────────────────────
+app.state.config       = _config
+app.state.config_path  = os.path.abspath(CONFIG_PATH)
+app.state.runner       = _runner
+app.state.embedder     = _embedder
+app.state.content_graph = _content_graph
 
 # ------ App start -----
 os.makedirs(_config.data_dir, exist_ok=True)
@@ -96,7 +106,7 @@ class RelayMiddleware(BaseHTTPMiddleware):
 
         # If path is ours. Pass to call_next handler.
         # This routes to the FASTAPI endpoint we designated
-        if path in LOCAL_PATHS or path.startswith("/_app/"):
+        if path in LOCAL_PATHS or any(path.startswith(p) for p in LOCAL_PREFIXES):
             return await call_next(request)
         
         # The Ollama server call.

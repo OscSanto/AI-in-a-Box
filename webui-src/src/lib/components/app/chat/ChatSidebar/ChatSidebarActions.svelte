@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Search, SquarePen, X, Network, Activity } from '@lucide/svelte';
+	import { Search, SquarePen, X, Network, Activity, Package } from '@lucide/svelte';
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -99,6 +99,18 @@
 			<div class="flex items-center gap-2">
 				<Activity class="h-4 w-4" />
 				Metrics
+			</div>
+		</Button>
+
+		<Button
+			class="w-full justify-start"
+			href="#/models"
+			onclick={handleMobileSidebarItemClick}
+			variant="ghost"
+		>
+			<div class="flex items-center gap-2">
+				<Package class="h-4 w-4" />
+				Models
 			</div>
 		</Button>
 	{/if}
