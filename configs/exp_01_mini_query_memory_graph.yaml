@@ -5,8 +5,8 @@ experiment:
 
 dataset:
   source: "zim"
-  zim_path: "wikipedia_en_all_maxi_2025-08"
-  zim_content_id: "wikipedia_en_all_maxi_2025-08"   # USED — config.zim_content_id
+  zim_path: "wikipedia_en_astronomy_maxi_2026-02"
+  zim_content_id: "wikipedia_en_astronomy_maxi_2026-02"   # USED — config.zim_content_id
   zim_search_term: "Albert"
   # NOT USED —
   #language: "en"
