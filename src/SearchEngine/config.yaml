@@ -1,0 +1,77 @@
+base_url: "http://box"
+ollama_timeout: 300       # seconds before an Ollama embed/chat call is abandoned
+#embed_model: "mxbai-embed-large"
+embed_model: "snowflake-arctic-embed:xs"
+llm_model: "smollm2:360m"
+llm_options:
+  num_predict: 120    # max output tokens — 2 sentences ≈ 60-80 tokens
+  num_ctx: 512        # context window — small since our context is tiny
+  temperature: 0.0
+  keep_alive: "15m"   # keep model in RAM between requests, avoids reload penalty
+db_path: "cache.db"
+cache_ttl: 604800     # 7 days in seconds
+
+search:
+  max_results: 25          # max articles returned from BM25 ranking
+  title_weight_floor: 0.2  # min title weight — prevents low-ranked articles being zeroed out in chunk scoring
+
+rerank:
+  junk_penalty: 0.3        # score multiplier for junk sections (References, See also, External links…)
+  section_alpha: 0.3       # how much section-name relevance scales the final chunk score
+  dedup_threshold: 0.6     # Jaccard overlap above which a chunk is dropped as duplicate
+  bm25_pool_multiplier: 5  # BM25 candidate pool = top_k * this, then top pool get embedded
+  bm25_pool_min: 20        # minimum pool size regardless of top_k
+  chunk_embed_chars: 500   # chars each chunk is truncated to before embedding
+
+rag:
+  system_prompt: "prompts/ai.md"
+  top_articles: 1            # how many top-ranked articles to fetch + chunk for RAG
+  top_chunks: 4              # how many chunks to pass to the LLM
+  max_chunk_chars: 300       # max paragraph size when chunking articles
+  min_paragraph_chars: 50    # drop chunks shorter than this
+  chunk_overlap: false       # prefix/suffix sentence overlap between adjacent chunks
+  max_chunks_per_article: 4  # cap chunk pool per article before BM25 filter
+  use_embeddings: true      # false = BM25-only chunk ranking (faster, no embed calls)
+
+ai_mode:
+  system_prompt: "prompts/ai_mode.md"
+  embed_model: "snowflake-arctic-embed:xs"
+  llm_model: "smollm2:360m"
+  llm_options:
+    num_predict: 200  # enough for a solid answer; 500 was forcing long prefill + long decode
+    num_ctx: 512      # matches /ai — context is ~300 tokens so 512 fits comfortably
+    temperature: 0.1
+    keep_alive: "15m"
+  title_rank_candidates: 8   # articles to embed titles + fetch sections for (progressive ranking pool)
+  para_rerank_candidates: 5  # top-N of title-ranked articles to embed first-para for (must be ≤ title_rank_candidates)
+  article_rerank_top: 2      # articles that survive first-para rerank into full chunking
+  top_chunks: 3              # 3 chunks keeps context under ~350 tokens total (fits num_ctx: 512)
+  max_chunk_chars: 250       # was 400 — shorter chunks = less prefill = faster TTFT
+  min_paragraph_chars: 50    # drop chunks shorter than this
+  chunk_overlap: false       # prefix/suffix sentence overlap between adjacent chunks
+  max_chunks_per_article: 5  # cap chunk pool per article
+  semantic_cache:
+    similarity_threshold: 0.94
+
+zims:
+  - name: "wikipedia_en_all_maxi_2025-08"
+    count: 20
+    has_images: true
+  - name: "wikipedia_en_100_2026-01"
+    count: 5
+    has_images: true
+  - name: "devdocs_en_python_2026-02"
+    count: 5
+    has_images: false
+  - name: "devdocs_en_c_2026-01"
+    count: 5
+    has_images: false
+  - name: "devdocs_en_git_2026-01"
+    count: 5
+    has_images: false
+  - name: "devdocs_en_openjdk_2026-02"
+    count: 5
+    has_images: false
+  - name: "wikipedia_en_astronomy_maxi_2025-11"
+    count: 20
+    has_images: true
