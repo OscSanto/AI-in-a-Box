@@ -1,11 +1,10 @@
 base_url: "http://box"
-ollama_timeout: 300       # seconds before an Ollama embed/chat call is abandoned
-#embed_model: "mxbai-embed-large"
-embed_model: "snowflake-arctic-embed:xs"
-llm_model: "smollm2:360m"
+ollama_timeout: 300       # seconds before an Ollama LLM call is abandoned
+embed_hf_model: "nomic-ai/nomic-embed-text-v1.5"   # fastembed model name — runs in-process via ONNX, no PyTorch/Ollama needed
+llm_model: "qwen2.5:0.5b"
 llm_options:
-  num_predict: 120    # max output tokens — 2 sentences ≈ 60-80 tokens
-  num_ctx: 512        # context window — small since our context is tiny
+  num_predict: 80     # 2 sentences ≈ 40-60 tokens
+  num_ctx: 384        # context window — 2 chunks × 200 chars ≈ 100 tokens + prompt
   temperature: 0.0
   keep_alive: "15m"   # keep model in RAM between requests, avoids reload penalty
 db_path: "cache.db"
@@ -26,8 +25,8 @@ rerank:
 rag:
   system_prompt: "prompts/ai.md"
   top_articles: 1            # how many top-ranked articles to fetch + chunk for RAG
-  top_chunks: 4              # how many chunks to pass to the LLM
-  max_chunk_chars: 300       # max paragraph size when chunking articles
+  top_chunks: 2              # how many chunks to pass to the LLM
+  max_chunk_chars: 200       # max paragraph size when chunking articles
   min_paragraph_chars: 50    # drop chunks shorter than this
   chunk_overlap: false       # prefix/suffix sentence overlap between adjacent chunks
   max_chunks_per_article: 4  # cap chunk pool per article before BM25 filter
@@ -35,15 +34,14 @@ rag:
 
 ai_mode:
   system_prompt: "prompts/ai_mode.md"
-  embed_model: "snowflake-arctic-embed:xs"
-  llm_model: "smollm2:360m"
+  llm_model: "qwen2.5:0.5b"
   llm_options:
-    num_predict: 200  # enough for a solid answer; 500 was forcing long prefill + long decode
+    num_predict: 80   # 1 sentence ≈ 30-50 tokens
     num_ctx: 512      # matches /ai — context is ~300 tokens so 512 fits comfortably
     temperature: 0.1
     keep_alive: "15m"
-  title_rank_candidates: 8   # articles to embed titles + fetch sections for (progressive ranking pool)
-  para_rerank_candidates: 5  # top-N of title-ranked articles to embed first-para for (must be ≤ title_rank_candidates)
+  title_rank_candidates: 5   # articles to embed titles + fetch sections for (progressive ranking pool)
+  para_rerank_candidates: 3  # top-N of title-ranked articles to embed first-para for (must be ≤ title_rank_candidates)
   article_rerank_top: 2      # articles that survive first-para rerank into full chunking
   top_chunks: 3              # 3 chunks keeps context under ~350 tokens total (fits num_ctx: 512)
   max_chunk_chars: 250       # was 400 — shorter chunks = less prefill = faster TTFT

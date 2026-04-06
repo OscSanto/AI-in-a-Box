@@ -19,10 +19,12 @@ import time
 import sqlite3
 import json
 import threading
+import asyncio
+import psutil
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse, JSONResponse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import re
@@ -32,6 +34,8 @@ from rank_bm25 import BM25Okapi
 from retrieval.kiwix_client import fetch_article_sections
 from retrieval.rerank import rank_chunks
 from ingest.article_cleaner import last_sentence, first_sentence
+from SearchEngine.metrics import llm_metrics
+from SearchEngine.metrics.llm_client import _extract_timings as _llm_extract_timings
 
 
 # ─── Config ───────────────────────────────────────────────────────────────────
@@ -53,8 +57,8 @@ CFG = _load_cfg()
 
 _BASE_URL = CFG.get("base_url", "http://box")
 _NAV_RE   = re.compile(r"^(List(s)? of|Index of|Outline of|Portal:|Category:)|\(disambiguation\)$", re.I)
-_EMBED_MODEL = CFG.get("embed_model", "snowflake-arctic-embed:xs")
-_LLM_MODEL   = CFG.get("llm_model", "qwen2.5:1.5b-instruct-q4_K_M")
+_EMBED_HF_MODEL = CFG.get("embed_hf_model", "Snowflake/snowflake-arctic-embed-xs")
+_LLM_MODEL   = CFG.get("llm_model", "smollm2:360m")
 _LLM_OPTIONS = CFG.get("llm_options", {})
 _ZIMS        = CFG.get("zims", [])
 _RAG         = CFG.get("rag", {})
@@ -67,15 +71,25 @@ _AI_PROMPT      = _load_prompt(_RAG.get("system_prompt", "prompts/ai.md"))
 _AI_MODE_CFG    = CFG.get("ai_mode", {})
 _AI_MODE_PROMPT = _load_prompt(_AI_MODE_CFG.get("system_prompt", "prompts/ai_mode.md"))
 
-_AI_MODE_EMBED_MODEL = _AI_MODE_CFG.get("embed_model", "snowflake-arctic-embed:xs")
 _AI_MODE_LLM_MODEL   = _AI_MODE_CFG.get("llm_model", "smollm2:360m")
 _AI_MODE_LLM_OPTIONS = _AI_MODE_CFG.get("llm_options", {})
 _AI_MODE_SIM_THRESH  = _AI_MODE_CFG.get("semantic_cache", {}).get("similarity_threshold", 0.92)
-_AI_MODE_KEEP_ALIVE  = _AI_MODE_CFG.get("llm_options", {}).get("keep_alive", "15m")
 
-# Ollama client with timeout — prevents hanging threads if Ollama stalls (OOM, model load stuck, etc.)
-_OLLAMA_TIMEOUT = CFG.get("ollama_timeout", 120)
+# Ollama client — LLM only (embeddings now run in-process via sentence-transformers)
+_OLLAMA_TIMEOUT = CFG.get("ollama_timeout", 300)
 _ollama = ollama.Client(timeout=_OLLAMA_TIMEOUT)
+
+# fastembed embed model — ONNX Runtime based, no PyTorch needed.
+# Loaded at import time; lives in Python process memory for the lifetime of the server.
+# No HTTP roundtrip, no keep_alive, not evicted by LLM calls.
+from fastembed import TextEmbedding as _FE
+print(f"⏳ Loading embed model {_EMBED_HF_MODEL!r} ...", flush=True)
+_fe_model = _FE(_EMBED_HF_MODEL)
+list(_fe_model.embed(["warmup"]))   # warm ONNX runtime
+print("✅ Embed model ready", flush=True)
+# ONNX Runtime is not safe for concurrent inference on the same model instance.
+# All embed calls go through this lock so requests queue cleanly instead of racing.
+_embed_lock = threading.Lock()
 
 
 # ─── SQLite cache ─────────────────────────────────────────────────────────────
@@ -207,15 +221,7 @@ def _db_set_ai_mode(query: str, query_vec: np.ndarray, answer: str):
 async def lifespan(app: FastAPI):
     _init_db()
     print("✅ SQLite cache initialised", flush=True)
-    # Pre-warm the AI Mode embed model so stage 1 of the first AI Mode request
-    # doesn't pay the full cold-load penalty (~30s).
-    def _warmup():
-        try:
-            _ollama.embeddings(model=_AI_MODE_EMBED_MODEL, prompt="warmup", keep_alive=_AI_MODE_KEEP_ALIVE)
-            print("✅ AI Mode embed model warmed", flush=True)
-        except Exception as e:
-            print(f"⚠️  Embed warmup failed: {e}", flush=True)
-    threading.Thread(target=_warmup, daemon=True).start()
+    llm_metrics.init(os.path.dirname(_CFG_PATH))
     yield
 
 app = FastAPI(lifespan=lifespan)
@@ -223,59 +229,41 @@ app = FastAPI(lifespan=lifespan)
 
 # ─── Embedding ────────────────────────────────────────────────────────────────
 
+def _st_encode(texts: list[str]) -> np.ndarray:
+    """Encode texts in-process using fastembed (ONNX Runtime). Returns L2-normalised (n, dim) float32.
+    Serialized via _embed_lock — ONNX Runtime does not support concurrent inference on one instance.
+    Batching is the key to throughput: one big batch holds the lock once vs many small calls queuing repeatedly.
+    """
+    with _embed_lock:
+        vecs = np.array(list(_fe_model.embed(texts)), dtype=np.float32)
+    norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    return vecs / norms
+
+
 def embed(text: str) -> np.ndarray:
-    """Single embed via ollama.embeddings() — L2-normalised."""
-    vec = np.array(
-        _ollama.embeddings(model=_EMBED_MODEL, prompt=text)["embedding"],
-        dtype=np.float32,
-    )
-    norm = np.linalg.norm(vec)
-    return vec / norm if norm > 0 else vec
+    return _st_encode([text])[0]
 
 
 def embed_batch(texts: list) -> np.ndarray:
-    """Batch embed in one Ollama call — L2-normalised, shape (n, dim)."""
-    resp  = _ollama.embed(model=_EMBED_MODEL, input=texts)
-    vecs  = np.array(resp["embeddings"], dtype=np.float32)
-    norms = np.linalg.norm(vecs, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    return vecs / norms
-
-
-class _Embedder:
-    """Minimal adapter so rank_chunks() can call embed_batch()."""
-    def embed_batch(self, texts):
-        return embed_batch(texts)
-
-_embedder = _Embedder()
+    return _st_encode(texts)
 
 
 def _embed_ai_mode(text: str) -> np.ndarray:
-    """Single embed using ollama.embed() — same endpoint as batch so keep_alive
-    carries over between the query embed (stage 1) and chunk batch (stage 6).
-    """
-    resp = _ollama.embed(model=_AI_MODE_EMBED_MODEL, input=[text], keep_alive=_AI_MODE_KEEP_ALIVE)
-    vec  = np.array(resp["embeddings"][0], dtype=np.float32)
-    norm = np.linalg.norm(vec)
-    return vec / norm if norm > 0 else vec
+    return _st_encode([text])[0]
 
 
 def _embed_batch_ai_mode(texts: list) -> np.ndarray:
-    """Batch embed in one ollama.embed() call — same endpoint as _embed_ai_mode
-    so the model loaded at stage 1 is still in RAM here at stage 6.
-    """
-    resp  = _ollama.embed(model=_AI_MODE_EMBED_MODEL, input=texts, keep_alive=_AI_MODE_KEEP_ALIVE)
-    vecs  = np.array(resp["embeddings"], dtype=np.float32)
-    norms = np.linalg.norm(vecs, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    return vecs / norms
+    return _st_encode(texts)
 
+
+class _Embedder:
+    def embed_batch(self, texts): return embed_batch(texts)
 
 class _AiModeEmbedder:
-    """Adapter so rank_chunks() can call embed_batch() with the AI Mode model."""
-    def embed_batch(self, texts):
-        return _embed_batch_ai_mode(texts)
+    def embed_batch(self, texts): return _embed_batch_ai_mode(texts)
 
+_embedder         = _Embedder()
 _ai_mode_embedder = _AiModeEmbedder()
 
 
@@ -294,33 +282,81 @@ def _extract_keywords(q: str) -> str:
     """
     Extract core search keywords using spaCy — zero LLM cost, runs in <5ms.
 
-    Priority: named entities (GPE, ORG, PERSON, WORK_OF_ART…) → noun chunks → raw query.
-    "tell me about Houston"      → "Houston"       (GPE entity)
-    "what is the speed of light" → "speed of light" (noun chunk)
-    "how does MIT work"          → "MIT"            (ORG entity)
+    Priority:
+      1. Named entities (GPE, ORG, PERSON, WORK_OF_ART…)
+      2. Prepositional objects — the topic word after "about/on/of/regarding"
+         e.g. "interesting facts on boxing" → "boxing"
+      3. Non-filler noun chunks
+      4. Raw query fallback
+
     Falls back to raw query if spaCy not loaded.
     """
+    # Generic nouns that appear in question templates but aren't the topic.
+    _FILLER_NOUNS = {
+        "fact", "facts", "thing", "things", "info", "information",
+        "example", "examples", "detail", "details", "aspect", "aspects",
+        "question", "questions", "way", "ways", "type", "types", "kind", "kinds",
+    }
+
+    # Question-pattern shortcut — highest priority, runs before spaCy.
+    # Strips question boilerplate and returns the topic verbatim, preserving numbers.
+    # "who is elizabeth 2"  → "elizabeth 2"
+    # "tell me about world war 2" → "world war 2"
+    _Q_RE = re.compile(
+        r"^(?:who|what|where|when|how)\s+(?:is|are|was|were|does|did|do)\s+(.+)$"
+        r"|^(?:tell me about|facts? (?:about|on|of)|info (?:about|on))\s+(.+)$",
+        re.I,
+    )
+
     if q in _keyword_cache:
         return _keyword_cache[q]
+
+    m = _Q_RE.match(q.strip())
+    if m:
+        topic = (m.group(1) or m.group(2) or "").strip()
+        if topic and len(topic.split()) <= 6:
+            _keyword_cache[q] = topic
+            return topic
+
     keywords = q
     if _nlp is not None:
         doc = _nlp(q)
-        ents = [e.text for e in doc.ents if e.label_ in {
+
+        # 1. Named entities — append immediately-following number so "Elizabeth 2" stays intact
+        raw_ents = [e for e in doc.ents if e.label_ in {
             "GPE", "LOC", "ORG", "PERSON", "NORP", "FAC",
             "PRODUCT", "EVENT", "WORK_OF_ART", "LAW",
         }]
-        if ents:
-            keywords = " ".join(ents[:3])
+        if raw_ents:
+            parts = []
+            for e in raw_ents[:3]:
+                text = e.text
+                if e.end < len(doc) and doc[e.end].pos_ == "NUM" and doc[e.end].is_digit:
+                    text += " " + doc[e.end].text
+                parts.append(text)
+            keywords = " ".join(parts)
         else:
-            # Exclude pronoun-only chunks ("me", "you", "it", "we"…) — they are
-            # never the search topic, just conversational filler.
-            chunks = [
-                c.text for c in doc.noun_chunks
-                if len(c.text.split()) <= 4
-                and not all(t.pos_ == "PRON" for t in c)
+            # 2. Prepositional objects — catches "boxing" in "facts on boxing",
+            #    "Egypt" in "tell me about Egypt", "photosynthesis" in "how does photosynthesis work"
+            pobjs = [
+                t.text for t in doc
+                if t.dep_ == "pobj"
+                and t.pos_ in {"NOUN", "PROPN"}
+                and t.lemma_.lower() not in _FILLER_NOUNS
             ]
-            if chunks:
-                keywords = " ".join(chunks[:2])
+            if pobjs:
+                keywords = " ".join(pobjs[:2])
+            else:
+                # 3. Noun chunks — skip pronouns and pure filler phrases
+                chunks = [
+                    c.text for c in doc.noun_chunks
+                    if len(c.text.split()) <= 4
+                    and not all(t.pos_ == "PRON" for t in c)
+                    and not all(t.lemma_.lower() in _FILLER_NOUNS for t in c if t.pos_ == "NOUN")
+                ]
+                if chunks:
+                    keywords = " ".join(chunks[:2])
+
     _keyword_cache[q] = keywords
     return keywords
 
@@ -818,6 +854,9 @@ async def ai_answer(q: str):
             token = chunk["message"]["content"]
             full_answer += token
             yield token
+            if getattr(chunk, "done", False):
+                try: llm_metrics.record("answer", _LLM_MODEL, _llm_extract_timings(chunk, _LLM_MODEL))
+                except Exception: pass
 
         mark("7_done", f"{len(full_answer)} chars generated")
         if full_answer:
@@ -944,6 +983,9 @@ async def ai_mode_answer(q: str):
                 token = chunk["message"]["content"]
                 full_answer += token
                 yield token
+                if getattr(chunk, "done", False):
+                    try: llm_metrics.record("answer", _AI_MODE_LLM_MODEL, _llm_extract_timings(chunk, _AI_MODE_LLM_MODEL))
+                    except Exception: pass
 
             if full_answer:
                 mark("8_done", f"{len(full_answer)} chars generated")
@@ -962,6 +1004,93 @@ async def ai_mode_answer(q: str):
                 ev.set()   # wake all waiters regardless of success or failure
 
     return StreamingResponse(_generate(), media_type="text/plain")
+
+
+# ─── Metrics ──────────────────────────────────────────────────────────────────
+
+_DASHBOARD_HTML = os.path.join(os.path.dirname(_CFG_PATH), "metrics", "metrics_dashboard.html")
+_BOOT_TIME      = psutil.boot_time()
+_OWN_PROC       = psutil.Process(os.getpid())
+
+
+@app.get("/metrics/dashboard", response_class=HTMLResponse)
+async def metrics_dashboard():
+    with open(_DASHBOARD_HTML, encoding="utf-8") as f:
+        return HTMLResponse(content=f.read(), headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/metrics")
+def get_metrics():
+    def _safe(fn, fallback=None):
+        try: return fn()
+        except Exception: return fallback
+
+    def _cpu():
+        pcts = psutil.cpu_percent(percpu=True)
+        freq = psutil.cpu_freq()
+        return {"per_core_pct": pcts, "avg_pct": round(sum(pcts)/len(pcts), 1) if pcts else 0,
+                "count_logical": psutil.cpu_count(logical=True), "count_physical": psutil.cpu_count(logical=False),
+                "freq_mhz": round(freq.current) if freq else None, "freq_max_mhz": round(freq.max) if freq else None}
+
+    def _memory():
+        ram = psutil.virtual_memory(); swap = psutil.swap_memory()
+        return {"ram_used_mb": round(ram.used/1024**2), "ram_total_mb": round(ram.total/1024**2),
+                "ram_pct": ram.percent, "ram_avail_mb": round(ram.available/1024**2),
+                "swap_used_mb": round(swap.used/1024**2), "swap_total_mb": round(swap.total/1024**2),
+                "swap_pct": swap.percent}
+
+    def _disk():
+        u = psutil.disk_usage(os.getcwd()); io = psutil.disk_io_counters()
+        return {"used_gb": round(u.used/1024**3, 2), "total_gb": round(u.total/1024**3, 2),
+                "free_gb": round(u.free/1024**3, 2), "pct": u.percent,
+                "read_mb": round(io.read_bytes/1024**2) if io else None,
+                "write_mb": round(io.write_bytes/1024**2) if io else None}
+
+    def _temperatures():
+        try:
+            out = []
+            for chip, entries in (psutil.sensors_temperatures() or {}).items():
+                for e in entries:
+                    out.append({"chip": chip, "label": e.label or chip, "current": e.current,
+                                "high": e.high, "critical": e.critical})
+            return out
+        except Exception: return []
+
+    def _process():
+        mem = _OWN_PROC.memory_info(); cpu = _OWN_PROC.cpu_percent()
+        return {"pid": _OWN_PROC.pid, "rss_mb": round(mem.rss/1024**2, 1),
+                "cpu_pct": cpu, "threads": _OWN_PROC.num_threads()}
+
+    records = llm_metrics.get_last(100)
+    return JSONResponse(content={
+        "uptime_s":     round(time.time() - _BOOT_TIME),
+        "cpu":          _safe(_cpu, {}),
+        "memory":       _safe(_memory, {}),
+        "disk":         _safe(_disk, {}),
+        "temperatures": _safe(_temperatures, []),
+        "process":      _safe(_process, {}),
+        "llm":          {"count": len(records), "records": records},
+    }, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/metrics/stream")
+async def metrics_stream():
+    queue: asyncio.Queue = asyncio.Queue()
+    llm_metrics.subscribe(queue)
+
+    async def _event_gen():
+        try:
+            while True:
+                record = await queue.get()
+                yield f"data: {json.dumps(record, default=str)}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            llm_metrics.unsubscribe(queue)
+
+    return StreamingResponse(_event_gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 

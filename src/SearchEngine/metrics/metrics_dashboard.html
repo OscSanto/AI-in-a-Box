@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>AIIAB — LLM Metrics</title>
+<style>
+  :root {
+    --bg:#0f1117; --surface:#1a1d27; --border:#2a2d3a;
+    --text:#e2e8f0; --muted:#64748b; --accent:#6366f1;
+    --green:#22c55e; --orange:#f97316; --red:#ef4444; --blue:#3b82f6;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:ui-monospace,monospace;font-size:13px;padding:16px;}
+  h1{font-size:18px;font-weight:600;margin-bottom:4px;}
+  h2{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;}
+  .header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;}
+  .status{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--red);}
+  .dot.live{background:var(--green);animation:pulse 2s infinite;}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+  /* Model cards */
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px;}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px;}
+  .card-title{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;}
+  .card-model{font-size:13px;font-weight:600;color:var(--accent);margin-bottom:10px;word-break:break-all;}
+  .card-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;}
+  .kv{display:flex;flex-direction:column;gap:2px;}
+  .kv-label{font-size:10px;color:var(--muted);}
+  .kv-value{font-size:12px;}
+
+  /* Tables */
+  .section{margin-bottom:28px;}
+  .section-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+  .toggle-btn{font-size:11px;color:var(--accent);background:none;border:1px solid var(--border);
+    border-radius:4px;padding:3px 8px;cursor:pointer;font-family:inherit;}
+  .toggle-btn:hover{border-color:var(--accent);}
+  .table-wrap{overflow-x:auto;border-radius:8px;border:1px solid var(--border);}
+  table{width:100%;border-collapse:collapse;}
+  th{background:var(--surface);color:var(--muted);font-size:10px;text-transform:uppercase;
+     letter-spacing:.06em;padding:8px 10px;text-align:left;white-space:nowrap;
+     border-bottom:1px solid var(--border);position:sticky;top:0;}
+  td{padding:7px 10px;border-bottom:1px solid var(--border);white-space:nowrap;vertical-align:middle;}
+  tr:last-child td{border-bottom:none;}
+  tr.cold td:first-child{border-left:3px solid var(--orange);}
+  tr.limit td:first-child{border-left:3px solid var(--red);}
+  tr.new-row{animation:fadeIn .6s ease;}
+  @keyframes fadeIn{from{background:#1e2235}to{background:transparent}}
+
+  .col-secondary{transition:opacity .2s;}
+  .hide-secondary .col-secondary{display:none;}
+
+  .badge{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;}
+  .badge-cold{background:#7c2d1220;color:var(--orange);border:1px solid #7c2d12;}
+  .badge-warm{background:#14532d20;color:var(--green);border:1px solid #14532d;}
+  .badge-limit{background:#7f1d1d20;color:var(--red);border:1px solid #7f1d1d;}
+
+  .num{color:var(--blue);}
+  .good{color:var(--green);}
+  .warn{color:var(--orange);}
+  .bad{color:var(--red);}
+
+  @media(max-width:768px){.cards{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>LLM Metrics</h1>
+    <div style="color:var(--muted);font-size:12px;margin-top:2px">AIIAB — live per-query telemetry</div>
+  </div>
+  <div class="status">
+    <div class="dot" id="dot"></div>
+    <span id="status-text">Connecting…</span>
+  </div>
+</div>
+
+<!-- Static model info -->
+<div style="margin-bottom:8px"><h2>Model Info (static)</h2></div>
+<div class="cards">
+  <div class="card"><div class="card-title">Answer Model (Stage 11)</div><div id="card-answer">Loading…</div></div>
+  <div class="card"><div class="card-title">Utility Model (Stage 2)</div><div id="card-utility">Loading…</div></div>
+</div>
+
+<!-- Per-model averages -->
+<div style="margin-bottom:8px"><h2>Per-Model Averages</h2></div>
+<div class="table-wrap" style="margin-bottom:24px">
+  <table id="avg-table">
+    <thead><tr>
+      <th>Model</th><th>Role</th><th>Queries</th>
+      <th>Avg TTFT s</th><th>Avg Gen tok/s</th><th>Avg Prefill %</th>
+      <th>Avg Out/In</th><th>Cold Starts</th>
+    </tr></thead>
+    <tbody id="avg-body">
+      <tr><td colspan="8" style="color:var(--muted);text-align:center;padding:20px">Waiting for data…</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Utility table -->
+<div class="section">
+  <div class="section-header">
+    <h2>Stage 2 — Utility / Query Rewrite <span id="util-count" style="color:var(--accent)"></span></h2>
+    <button class="toggle-btn" onclick="toggleSecondary('util-table', this)">Show all columns</button>
+  </div>
+  <div class="table-wrap">
+    <table id="util-table" class="hide-secondary">
+      <thead><tr>
+        <th>Time</th>
+        <th>Cold?</th>
+        <th>TTFT s</th>
+        <th>Prefill s</th>
+        <th>Prefill tok/s</th>
+        <th>Tokens In</th>
+        <th>Gen s</th>
+        <th>Gen tok/s</th>
+        <th>Tokens Out</th>
+        <th>Total Tokens</th>
+        <th>Efficiency</th>
+        <th>Out/In</th>
+        <th>Prefill %</th>
+        <th>Expires At</th>
+        <th class="col-secondary">Load s</th>
+        <th class="col-secondary">Total s</th>
+        <th class="col-secondary">VRAM bytes</th>
+        <th class="col-secondary">Digest</th>
+      </tr></thead>
+      <tbody id="util-body">
+        <tr><td colspan="18" style="color:var(--muted);text-align:center;padding:20px">Waiting for first query…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Answer table -->
+<div class="section">
+  <div class="section-header">
+    <h2>Stage 11 — Answer Generation <span id="ans-count" style="color:var(--accent)"></span></h2>
+    <button class="toggle-btn" onclick="toggleSecondary('ans-table', this)">Show all columns</button>
+  </div>
+  <div class="table-wrap">
+    <table id="ans-table" class="hide-secondary">
+      <thead><tr>
+        <th>Time</th>
+        <th>Cold?</th>
+        <th>TTFT s</th>
+        <th>Prefill s</th>
+        <th>Prefill tok/s</th>
+        <th>Tokens In</th>
+        <th>Gen s</th>
+        <th>Gen tok/s</th>
+        <th>Tokens Out</th>
+        <th>Total Tokens</th>
+        <th>Efficiency</th>
+        <th>Out/In</th>
+        <th>Prefill %</th>
+        <th>Context %</th>
+        <th>KV RAM MB</th>
+        <th>Chunks</th>
+        <th>Pipeline s</th>
+        <th>Expires At</th>
+        <th class="col-secondary">Load s</th>
+        <th class="col-secondary">Total s</th>
+        <th class="col-secondary">VRAM bytes</th>
+        <th class="col-secondary">Digest</th>
+      </tr></thead>
+      <tbody id="ans-body">
+        <tr><td colspan="22" style="color:var(--muted);text-align:center;padding:20px">Waiting for first query…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Embed table -->
+<div class="section">
+  <div class="section-header">
+    <h2>Embedder <span id="emb-count" style="color:var(--accent)"></span></h2>
+    <button class="toggle-btn" onclick="toggleSecondary('emb-table', this)">Show all columns</button>
+  </div>
+  <div class="table-wrap">
+    <table id="emb-table" class="hide-secondary">
+      <thead><tr>
+        <th>Time</th>
+        <th>Model</th>
+        <th>Cold?</th>
+        <th>Embed s</th>
+        <th>Tokens</th>
+        <th>Batch Size</th>
+        <th>Embed tok/s</th>
+        <th>Expires At</th>
+        <th class="col-secondary">Load s</th>
+        <th class="col-secondary">Total s</th>
+        <th class="col-secondary">VRAM bytes</th>
+        <th class="col-secondary">Digest</th>
+      </tr></thead>
+      <tbody id="emb-body">
+        <tr><td colspan="12" style="color:var(--muted);text-align:center;padding:20px">Waiting for first embed…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const fmt = {
+  ts:   v => v ? new Date(v*1000).toLocaleTimeString() : '—',
+  n1:   v => v != null ? `<span class="num">${v.toFixed(1)}</span>` : '—',
+  n3:   v => v != null ? `<span class="num">${v.toFixed(3)}</span>` : '—',
+  int:  v => v != null ? `<span class="num">${v}</span>` : '—',
+  pct:  v => v != null ? `<span class="num">${(v*100).toFixed(1)}%</span>` : '—',
+  bytes: v => v != null ? `<span class="num">${(v/1024/1024).toFixed(0)} MB</span>` : '—',
+  spd:  v => {
+    if (v == null) return '—';
+    const cls = v >= 10 ? 'good' : v >= 5 ? 'warn' : 'bad';
+    return `<span class="${cls}">${v.toFixed(1)}</span>`;
+  },
+  ttft: v => {
+    if (v == null) return '—';
+    const cls = v <= 2 ? 'good' : v <= 10 ? 'warn' : 'bad';
+    return `<span class="${cls}">${v.toFixed(3)}</span>`;
+  },
+  expires: v => {
+    if (!v || v === 'None') return '—';
+    try {
+      const d = new Date(v);
+      const diff = Math.round((d - Date.now()) / 1000);
+      if (diff <= 0) return '<span class="bad">expired</span>';
+      if (diff < 60) return `<span class="warn">${diff}s</span>`;
+      return `<span class="good">${Math.round(diff/60)}m</span>`;
+    } catch { return v; }
+  },
+  digest: v => v ? `<span style="color:var(--muted);font-size:10px">${v.slice(0,12)}…</span>` : '—',
+};
+
+function coldBadge(cold) {
+  return cold
+    ? '<span class="badge badge-cold">COLD</span>'
+    : '<span class="badge badge-warm">warm</span>';
+}
+
+function limitBadge(r) {
+  return r.hit_token_limit ? '<span class="badge badge-limit">LIMIT</span>' : '';
+}
+
+function makeUtilRow(r, isNew) {
+  const tr = document.createElement('tr');
+  if (r.was_cold) tr.classList.add('cold');
+  if (r.hit_token_limit) tr.classList.add('limit');
+  if (isNew) tr.classList.add('new-row');
+  tr.innerHTML = `
+    <td>${fmt.ts(r.ts)} ${limitBadge(r)}</td>
+    <td>${coldBadge(r.was_cold)}</td>
+    <td>${fmt.ttft(r.ttft_s)}</td>
+    <td>${fmt.n3(r.prefill_s)}</td>
+    <td>${fmt.spd(r.prefill_tok_s)}</td>
+    <td>${fmt.int(r.prompt_tokens)}</td>
+    <td>${fmt.n3(r.gen_s)}</td>
+    <td>${fmt.spd(r.gen_tok_s)}</td>
+    <td>${fmt.int(r.gen_tokens)}</td>
+    <td>${fmt.int(r.total_tokens)}</td>
+    <td>${fmt.spd(r.gen_efficiency_tok_s)}</td>
+    <td>${fmt.n3(r.output_input_ratio)}</td>
+    <td>${r.prefill_pct != null ? `<span class="num">${r.prefill_pct}%</span>` : '—'}</td>
+    <td>${fmt.expires(r.expires_at)}</td>
+    <td class="col-secondary">${fmt.n3(r.load_s)}</td>
+    <td class="col-secondary">${fmt.n3(r.total_s)}</td>
+    <td class="col-secondary">${fmt.bytes(r.size_vram_bytes)}</td>
+    <td class="col-secondary">${fmt.digest(r.digest)}</td>`;
+  return tr;
+}
+
+function makeAnsRow(r, isNew) {
+  const tr = document.createElement('tr');
+  if (r.was_cold) tr.classList.add('cold');
+  if (r.hit_token_limit) tr.classList.add('limit');
+  if (isNew) tr.classList.add('new-row');
+  tr.innerHTML = `
+    <td>${fmt.ts(r.ts)} ${limitBadge(r)}</td>
+    <td>${coldBadge(r.was_cold)}</td>
+    <td>${fmt.ttft(r.ttft_s)}</td>
+    <td>${fmt.n3(r.prefill_s)}</td>
+    <td>${fmt.spd(r.prefill_tok_s)}</td>
+    <td>${fmt.int(r.prompt_tokens)}</td>
+    <td>${fmt.n3(r.gen_s)}</td>
+    <td>${fmt.spd(r.gen_tok_s)}</td>
+    <td>${fmt.int(r.gen_tokens)}</td>
+    <td>${fmt.int(r.total_tokens)}</td>
+    <td>${fmt.spd(r.gen_efficiency_tok_s)}</td>
+    <td>${fmt.n3(r.output_input_ratio)}</td>
+    <td>${r.prefill_pct != null ? `<span class="num">${r.prefill_pct}%</span>` : '—'}</td>
+    <td>${fmt.pct(r.context_ratio)}</td>
+    <td>${fmt.n1(r.est_kv_ram_mb)}</td>
+    <td>${fmt.int(r.chunk_count)}</td>
+    <td>${fmt.n3(r.pipeline_total_s)}</td>
+    <td>${fmt.expires(r.expires_at)}</td>
+    <td class="col-secondary">${fmt.n3(r.load_s)}</td>
+    <td class="col-secondary">${fmt.n3(r.total_s)}</td>
+    <td class="col-secondary">${fmt.bytes(r.size_vram_bytes)}</td>
+    <td class="col-secondary">${fmt.digest(r.digest)}</td>`;
+  return tr;
+}
+
+function makeEmbedRow(r, isNew) {
+  const tr = document.createElement('tr');
+  if (r.was_cold) tr.classList.add('cold');
+  if (isNew) tr.classList.add('new-row');
+  tr.innerHTML = `
+    <td>${fmt.ts(r.ts)}</td>
+    <td style="color:var(--accent);max-width:160px;overflow:hidden;text-overflow:ellipsis" title="${r.model||''}">${r.model||'—'}</td>
+    <td>${coldBadge(r.was_cold)}</td>
+    <td>${fmt.n3(r.embed_s)}</td>
+    <td>${fmt.int(r.tokens)}</td>
+    <td>${fmt.int(r.batch_size)}</td>
+    <td>${fmt.spd(r.embed_tok_s)}</td>
+    <td>${fmt.expires(r.expires_at)}</td>
+    <td class="col-secondary">${fmt.n3(r.load_s)}</td>
+    <td class="col-secondary">${fmt.n3(r.total_s)}</td>
+    <td class="col-secondary">${fmt.bytes(r.size_vram_bytes)}</td>
+    <td class="col-secondary">${fmt.digest(r.digest)}</td>`;
+  return tr;
+}
+
+function renderModelCard(elId, r) {
+  const el = document.getElementById(elId);
+  if (!r) { el.innerHTML = '<span style="color:var(--muted)">No data yet</span>'; return; }
+  const sizeMb = r.size_bytes ? (r.size_bytes/1024/1024).toFixed(0)+' MB' : '—';
+  el.innerHTML = `
+    <div class="card-model">${r.model||'—'}</div>
+    <div class="card-grid">
+      <div class="kv"><div class="kv-label">Params</div><div class="kv-value">${r.param_size||'—'}</div></div>
+      <div class="kv"><div class="kv-label">Quant</div><div class="kv-value">${r.quantization||'—'}</div></div>
+      <div class="kv"><div class="kv-label">Family</div><div class="kv-value">${r.family||'—'}</div></div>
+      <div class="kv"><div class="kv-label">Context</div><div class="kv-value">${r.context_length ? r.context_length.toLocaleString() : '—'}</div></div>
+      <div class="kv"><div class="kv-label">GQA ratio</div><div class="kv-value">${r.gqa_ratio||'—'}</div></div>
+      <div class="kv"><div class="kv-label">KV/token</div><div class="kv-value">${r.kv_per_token_bytes ? r.kv_per_token_bytes+' B' : '—'}</div></div>
+      <div class="kv"><div class="kv-label">Disk size</div><div class="kv-value">${sizeMb}</div></div>
+      <div class="kv"><div class="kv-label">Param count</div><div class="kv-value">${r.param_count ? (r.param_count/1e9).toFixed(2)+'B' : '—'}</div></div>
+    </div>`;
+}
+
+function avg(arr) { return arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : null; }
+
+function renderAvgTable(records) {
+  // Group by model+role
+  const groups = {};
+  for (const r of records) {
+    const key = `${r.model}|||${r.role}`;
+    if (!groups[key]) groups[key] = { model: r.model, role: r.role, rows: [] };
+    groups[key].rows.push(r);
+  }
+  const tbody = document.getElementById('avg-body');
+  if (!Object.keys(groups).length) return;
+  tbody.innerHTML = '';
+  // Sort: answer first, then utility; alphabetical within
+  const sorted = Object.values(groups).sort((a,b) => {
+    if (a.role !== b.role) return a.role === 'answer' ? -1 : 1;
+    return a.model.localeCompare(b.model);
+  });
+  for (const g of sorted) {
+    const rows = g.rows;
+    const avgTTFT   = avg(rows.map(r=>r.ttft_s).filter(v=>v!=null));
+    const avgGenSpd = avg(rows.map(r=>r.gen_tok_s).filter(v=>v!=null));
+    const avgPrefPct= avg(rows.map(r=>r.prefill_pct).filter(v=>v!=null));
+    const avgOutIn  = avg(rows.map(r=>r.output_input_ratio).filter(v=>v!=null));
+    const coldCount = rows.filter(r=>r.was_cold).length;
+    const roleBadge = g.role === 'answer'
+      ? `<span style="color:var(--accent)">answer</span>`
+      : `<span style="color:var(--muted)">utility</span>`;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td style="color:var(--accent);max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${g.model}">${g.model}</td>
+      <td>${roleBadge}</td>
+      <td><span class="num">${rows.length}</span></td>
+      <td>${avgTTFT   != null ? `<span class="${avgTTFT<=2?'good':avgTTFT<=10?'warn':'bad'}">${avgTTFT.toFixed(2)}s</span>` : '—'}</td>
+      <td>${avgGenSpd != null ? `<span class="${avgGenSpd>=10?'good':avgGenSpd>=5?'warn':'bad'}">${avgGenSpd.toFixed(1)}</span>` : '—'}</td>
+      <td>${avgPrefPct!= null ? `<span class="num">${avgPrefPct.toFixed(1)}%</span>` : '—'}</td>
+      <td>${avgOutIn  != null ? `<span class="num">${avgOutIn.toFixed(3)}</span>` : '—'}</td>
+      <td>${coldCount ? `<span class="warn">${coldCount}</span>` : `<span class="good">0</span>`}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function toggleSecondary(tableId, btn) {
+  const table = document.getElementById(tableId);
+  const hiding = table.classList.toggle('hide-secondary');
+  btn.textContent = hiding ? 'Show all columns' : 'Hide secondary';
+}
+
+function clearPlaceholder(tbody) {
+  if (tbody.firstElementChild?.querySelector('td[colspan]')) tbody.innerHTML = '';
+}
+
+let utilCount = 0, ansCount = 0, embCount = 0;
+let allRecords = [];
+
+function updateCounts(u, a, e) {
+  utilCount = u; ansCount = a; embCount = e;
+  document.getElementById('util-count').textContent = `(${u})`;
+  document.getElementById('ans-count').textContent  = `(${a})`;
+  document.getElementById('emb-count').textContent  = `(${e})`;
+}
+
+async function loadInitial() {
+  const res = await fetch('/api/metrics');
+  const data = await res.json();
+  allRecords = data.llm?.records || [];
+  const utilRecords = allRecords.filter(r => r.role === 'utility');
+  const ansRecords  = allRecords.filter(r => r.role === 'answer');
+  const embRecords  = allRecords.filter(r => r.role === 'embed');
+
+  const lastAns  = ansRecords[ansRecords.length-1];
+  const lastUtil = utilRecords[utilRecords.length-1];
+  renderModelCard('card-answer',  lastAns);
+  renderModelCard('card-utility', lastUtil);
+
+  if (utilRecords.length) {
+    const tbody = document.getElementById('util-body');
+    tbody.innerHTML = '';
+    [...utilRecords].reverse().forEach(r => tbody.appendChild(makeUtilRow(r, false)));
+  }
+  if (ansRecords.length) {
+    const tbody = document.getElementById('ans-body');
+    tbody.innerHTML = '';
+    [...ansRecords].reverse().forEach(r => tbody.appendChild(makeAnsRow(r, false)));
+  }
+  if (embRecords.length) {
+    const tbody = document.getElementById('emb-body');
+    tbody.innerHTML = '';
+    [...embRecords].reverse().forEach(r => tbody.appendChild(makeEmbedRow(r, false)));
+  }
+  updateCounts(utilRecords.length, ansRecords.length, embRecords.length);
+  renderAvgTable(allRecords);
+}
+
+function connectSSE() {
+  const es = new EventSource('/api/metrics/stream');
+  es.onopen = () => {
+    document.getElementById('dot').classList.add('live');
+    document.getElementById('status-text').textContent = 'Live';
+  };
+  es.onmessage = e => {
+    const r = JSON.parse(e.data);
+    allRecords.push(r);
+    if (r.role === 'utility') {
+      const tbody = document.getElementById('util-body');
+      clearPlaceholder(tbody);
+      tbody.insertBefore(makeUtilRow(r, true), tbody.firstChild);
+      updateCounts(++utilCount, ansCount, embCount);
+      renderModelCard('card-utility', r);
+    }
+    if (r.role === 'answer') {
+      const tbody = document.getElementById('ans-body');
+      clearPlaceholder(tbody);
+      tbody.insertBefore(makeAnsRow(r, true), tbody.firstChild);
+      updateCounts(utilCount, ++ansCount, embCount);
+      renderModelCard('card-answer', r);
+    }
+    if (r.role === 'embed') {
+      const tbody = document.getElementById('emb-body');
+      clearPlaceholder(tbody);
+      tbody.insertBefore(makeEmbedRow(r, true), tbody.firstChild);
+      updateCounts(utilCount, ansCount, ++embCount);
+    }
+    renderAvgTable(allRecords);
+  };
+  es.onerror = () => {
+    document.getElementById('dot').classList.remove('live');
+    document.getElementById('status-text').textContent = 'Reconnecting…';
+    es.close();
+    setTimeout(connectSSE, 3000);
+  };
+}
+
+loadInitial().then(connectSSE);
+</script>
+</body>
+</html>
