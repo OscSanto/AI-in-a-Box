@@ -1,0 +1,19 @@
+# Balanced mode — FAISS + BM25 + RRF, Phase 1 chunks only
+#
+# Stage 1: FAISS semantic search + FTS5 BM25 title → RRF fusion
+# Stage 2: best Phase 1 pre-embedded chunks from top articles
+# Result:  top chunks passed to LLM
+
+retrieval:
+  faiss_candidates: 40       # FAISS top-k pool (top_k × 4)
+  bm25_candidates: 30        # BM25 title matches (top_k × 3)
+  top_k: 3                   # chunks returned to LLM
+
+llm_model: "qwen2.5:0.5b"
+llm_options:
+  num_predict: 200
+  num_ctx: 2048
+  temperature: 0.1
+  keep_alive: "25m"
+
+system_prompt: "prompts/ai_mode_balanced.md"

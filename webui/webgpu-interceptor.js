@@ -255,10 +255,44 @@ Rewrite the follow-up as a complete standalone question. Reply with only the rew
   }
 
   // ── 7. Monkey-patch fetch ─────────────────────────────────────────────────
+  // ── Mode button renaming ──────────────────────────────────────────────────
+  // The llama.cpp webui has three buttons (Search / Chat / Summary) which send
+  // mode values we remap to our pipeline modes.
+  // Button text labels are also replaced to match.
+  const MODE_REMAP = { "search": "fast", "chat": "balanced", "summary": "complex" };
+  const MODE_LABELS = { "fast": "Fast", "balanced": "Balanced", "complex": "Complex" };
+
+  function _patchModeButtons() {
+    // llama.cpp renders buttons with data-value or text content matching mode names
+    document.querySelectorAll("button, [role=button]").forEach(btn => {
+      const txt = btn.textContent.trim().toLowerCase();
+      if (MODE_LABELS[txt] || MODE_REMAP[txt]) return; // already patched
+      if (txt === "search")  { btn.textContent = "Fast";     btn.dataset.value = "fast"; }
+      if (txt === "chat")    { btn.textContent = "Balanced"; btn.dataset.value = "balanced"; }
+      if (txt === "summary") { btn.textContent = "Complex";  btn.dataset.value = "complex"; }
+    });
+  }
+  // Run on load and whenever DOM changes (buttons may render late)
+  _patchModeButtons();
+  new MutationObserver(_patchModeButtons).observe(document.body,
+    { childList: true, subtree: true });
+
   const _origFetch = window.fetch.bind(window);
 
   window.fetch = async function (input, init, ...rest) {
     const url = typeof input === "string" ? input : (input instanceof URL ? input.href : input.url);
+
+    // Remap mode in ALL /v1/chat/completions requests (not just GPU path)
+    if (url && url.includes("/v1/chat/completions") && init?.body) {
+      try {
+        const body = JSON.parse(init.body);
+        if (body.mode && MODE_REMAP[body.mode]) {
+          body.mode = MODE_REMAP[body.mode];
+          init = { ...init, body: JSON.stringify(body) };
+          if (input && typeof input !== "string") input = new Request(input, init);
+        }
+      } catch (_) {}
+    }
 
     // Only intercept chat completions when GPU is active
     if (!gpuEnabled || !gpuReady || !engine) {

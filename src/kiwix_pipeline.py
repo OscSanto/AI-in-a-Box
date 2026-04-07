@@ -305,19 +305,6 @@ class Pipeline:
             print(f"  [chunk {i+1:02d}] {chunk[:120].replace(chr(10), ' ')!r}", flush=True)
         mark(f"8_chunk_collection — {len(article_chunks)} chunks from {len(kiwix_results)} articles")
 
-        # ── Stage 7b: content_graph_build (incremental)
-        # Ingest articles into the graph for relation extraction (Stage 8.5) and future traversal.
-        if config.content_graph_enabled and graph_articles:
-            try:
-                content_graph.build(graph_articles, zim_meta)
-                print(f"[pipeline] graph_build — {len(graph_articles)} articles", flush=True)
-            except Exception as e:
-                print(f"[pipeline] graph_build failed (non-fatal): {e}", flush=True)
-
-        #Stage 8.5 deprecated
-        llm_relations = []
-        top_chunks = []
-
         # ====== Stage 9: chunk_ranking
         # Multi-hop queries (>1 entity): rank against the original query — it encodes all hops.
         # Single-entity queries: rank against rewritten (focused Wikipedia title).

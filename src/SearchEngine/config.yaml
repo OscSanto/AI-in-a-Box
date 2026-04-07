@@ -1,12 +1,13 @@
 base_url: "http://box"
 ollama_timeout: 300       # seconds before an Ollama LLM call is abandoned
-embed_hf_model: "nomic-ai/nomic-embed-text-v1.5"   # fastembed model name — runs in-process via ONNX, no PyTorch/Ollama needed
+embed_hf_model: "Snowflake/snowflake-arctic-embed-xs"   # 384-dim — shared with zim_indexer, single model in RAM
 llm_model: "qwen2.5:0.5b"
 llm_options:
   num_predict: 80     # 2 sentences ≈ 40-60 tokens
   num_ctx: 384        # context window — 2 chunks × 200 chars ≈ 100 tokens + prompt
   temperature: 0.0
-  keep_alive: "15m"   # keep model in RAM between requests, avoids reload penalty
+  keep_alive: "25m"   # keep model in RAM between requests, avoids reload penalty
+zim_index_base: "/library/zims/content"   # parent dir of per-ZIM index folders ({name}/data.db + {name}/faiss.index)
 db_path: "cache.db"
 cache_ttl: 604800     # 7 days in seconds
 
@@ -53,23 +54,11 @@ ai_mode:
 
 zims:
   - name: "wikipedia_en_all_maxi_2025-08"
-    count: 20
+    count: 5
     has_images: true
   - name: "wikipedia_en_100_2026-01"
     count: 5
     has_images: true
-  - name: "devdocs_en_python_2026-02"
-    count: 5
-    has_images: false
-  - name: "devdocs_en_c_2026-01"
-    count: 5
-    has_images: false
-  - name: "devdocs_en_git_2026-01"
-    count: 5
-    has_images: false
-  - name: "devdocs_en_openjdk_2026-02"
-    count: 5
-    has_images: false
   - name: "wikipedia_en_astronomy_maxi_2025-11"
-    count: 20
+    count: 5
     has_images: true

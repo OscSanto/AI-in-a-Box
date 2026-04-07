@@ -1,11 +1,11 @@
 /**
- * Stores the user-selected pipeline mode ("kiwix" | "chat" | "summarize").
+ * Stores the user-selected pipeline mode ("fast" | "balanced" | "complex").
  * Read by chatStore.getApiOptions() and sent to the backend with every request.
  */
 
-export type PipelineMode = 'kiwix' | 'chat' | 'summarize';
+export type PipelineMode = 'fast' | 'balanced' | 'complex';
 
-let _mode = $state<PipelineMode>('kiwix');
+let _mode = $state<PipelineMode>('balanced');
 
 export function pipelineMode(): PipelineMode {
 	return _mode;

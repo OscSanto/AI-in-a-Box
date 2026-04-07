@@ -19,9 +19,9 @@
 	let currentMode = $derived(pipelineMode());
 
 	const MODES: { value: PipelineMode; label: string }[] = [
-		{ value: 'kiwix',     label: 'Search' },
-		{ value: 'chat',      label: 'Chat'   },
-		{ value: 'summarize', label: 'Summarize' },
+		{ value: 'fast',     label: 'Fast'     },
+		{ value: 'balanced', label: 'Balanced' },
+		{ value: 'complex',  label: 'Complex'  },
 	];
 
 	interface Props {

@@ -1,0 +1,22 @@
+# Complex mode — FAISS + BM25 + RRF, then full article expansion on top hit
+#
+# Stage 1: FAISS semantic search + FTS5 BM25 title → RRF fusion (wider pool)
+# Stage 2: fetch ALL sections of the top winning article from SQLite,
+#           embed in one batch on-the-fly, cosine-rank, pick best chunks
+# Result:  semantically best chunks from the full article, not just Phase 1
+
+retrieval:
+  faiss_candidates: 80       # FAISS top-k pool (top_k × 8)
+  bm25_candidates: 50        # BM25 title matches (top_k × 5)
+  top_k: 5                   # chunks returned to LLM
+  expand_top_n_articles: 1   # how many top RRF articles to fully expand
+  expansion_top_chunks: 5    # chunks to pick from expanded article sections
+
+llm_model: "qwen2.5:0.5b"
+llm_options:
+  num_predict: 450
+  num_ctx: 4096
+  temperature: 0.1
+  keep_alive: "25m"
+
+system_prompt: "prompts/ai_mode_complex.md"
