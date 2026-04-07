@@ -196,7 +196,8 @@ async def zim_sources(q: str, mode: str = "balanced"):
     """
     if not zim_retrieval.is_available():
         return JSONResponse({"sources": []})
-    hits = zim_retrieval.search(q, mode=mode)
+    # Use fast mode — sources only need article titles/URLs, not expansion chunks
+    hits = zim_retrieval.search(q, mode="fast")
     # Deduplicate by article title — one source card per article
     seen: set[str] = set()
     sources = []
@@ -276,12 +277,10 @@ async def ai_mode_answer(q: str, mode: str = "balanced"):
             )
 
             if zim_retrieval.is_available():
-                # ── FAISS path: embed (for cache) + ZIM RRF search in parallel ──
-                with ThreadPoolExecutor(max_workers=2) as ex:
-                    vec_fut = ex.submit(embed_ai_mode, q)
-                    zim_fut = ex.submit(zim_retrieval.search, q, _top_k, mode)
-                    query_vec = vec_fut.result()
-                    zim_hits  = zim_fut.result()
+                # ── FAISS path: embed once, reuse vector for cache + search ──
+                # Expansion now uses FAISS reconstruct() — no re-embedding at query time.
+                query_vec = embed_ai_mode(q)
+                zim_hits  = zim_retrieval.search(q, _top_k, mode, query_vec=query_vec)
                 mark("1_embed_and_search",
                      f"vec={query_vec.shape} | {len(zim_hits)} ZIM chunks ({mode})")
 

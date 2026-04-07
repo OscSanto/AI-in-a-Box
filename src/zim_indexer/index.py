@@ -46,6 +46,8 @@ def load_or_create(index_path: Path) -> faiss.IndexIDMap:
         inner = faiss.downcast_index(idx.index)
         if hasattr(inner, "nprobe"):
             inner.nprobe = _NPROBE
+        if hasattr(inner, "make_direct_map"):
+            inner.make_direct_map()   # enables reconstruct() for IVFFlat indexes
         print(f"  Loaded FAISS index: {idx.ntotal:,} vectors from {index_path}",
               flush=True)
         return idx

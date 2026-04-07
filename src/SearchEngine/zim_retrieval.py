@@ -122,17 +122,16 @@ def _rrf_search(h: _ZimHandle, query_vec: np.ndarray,
               1 / (_RRF_K + bm25_rank_map.get(cid, n)))
         for cid in all_cids
     }
-    top_cids = sorted(rrf, key=rrf.__getitem__, reverse=True)[:top_k * 2]
+    # Only scan the top candidates — pruning here keeps DB lookups bounded
+    top_cids = sorted(rrf, key=rrf.__getitem__, reverse=True)[:top_k * 4]
 
-    # Scan all RRF candidates — two separate buckets
+    # Scan top RRF candidates — two separate buckets
     regular_hits: list[dict] = []   # lead + section paragraphs, up to top_k
     infobox_hits: list[dict] = []   # infobox rows passing threshold, additive
     seen_regular: set[tuple] = set()
     infobox_count: dict[str, int] = {}
 
-    all_cids_sorted = sorted(rrf, key=rrf.__getitem__, reverse=True)
-
-    for cid in all_cids_sorted:
+    for cid in top_cids:
 
         chunk = get_chunk_by_id(h.con, cid)
         if not chunk:
@@ -198,9 +197,16 @@ def _expand_article(h: _ZimHandle, article_id: int,
     print(f"[expand] '{article_title}' — {len(rows)} embedded chunks"
           f"{' (prose only)' if prose_only else ''}", flush=True)
 
-    texts = [r[3] for r in rows]
-    vecs  = _encode(texts)                       # (N, 384) L2-normalised
-    sims  = (vecs @ query_vec).tolist()          # cosine scores
+    # Reconstruct stored vectors from FAISS — no re-embedding needed.
+    # chunk id == FAISS external ID (added via add_with_ids).
+    chunk_ids = [r[0] for r in rows]
+    try:
+        vecs = np.array([h.idx.reconstruct(cid) for cid in chunk_ids], dtype=np.float32)
+    except Exception:
+        # Fallback: re-encode if FAISS reconstruction not supported on this index type
+        texts = [r[3] for r in rows]
+        vecs  = _encode(texts)
+    sims = (vecs @ query_vec).tolist()           # cosine scores
 
     ranked = sorted(zip(sims, rows), key=lambda x: x[0], reverse=True)
 
@@ -234,11 +240,14 @@ def _expand_article(h: _ZimHandle, article_id: int,
 # ── Public search entry point ─────────────────────────────────────────────────
 
 def search(query_text: str, top_k: int = 10,
-           mode: str = "balanced") -> list[dict]:
+           mode: str = "balanced",
+           query_vec: np.ndarray | None = None) -> list[dict]:
     """
     Search all loaded ZIM indexes.
 
     mode: "fast" | "balanced" | "complex"
+    query_vec: pre-computed (384,) L2-normalised embedding — pass to avoid
+               re-embedding when the caller already has the vector.
 
     Returns list of chunk dicts sorted by rrf_score (faiss_score for complex
     expansion chunks), up to top_k results:
@@ -255,7 +264,8 @@ def search(query_text: str, top_k: int = 10,
     bm25_n  = r.get("bm25_candidates",  30)
     top_k   = r.get("top_k", top_k)
 
-    query_vec = _encode([query_text])[0]   # (384,) L2-normalised
+    if query_vec is None:
+        query_vec = _encode([query_text])[0]   # (384,) L2-normalised
 
     # Keep prose (lead + section paragraphs) and infobox rows as separate buckets.
     # Prose fills top_k slots; infobox is additive on top — never crowds out prose.
@@ -263,8 +273,8 @@ def search(query_text: str, top_k: int = 10,
     all_infobox: list[dict] = []
 
     def _split(hits: list[dict]) -> tuple[list[dict], list[dict]]:
-        prose   = [h for h in hits if not h["section_title"].startswith("Infobox:")]
-        infobox = [h for h in hits if     h["section_title"].startswith("Infobox:")]
+        prose   = [c for c in hits if not c["section_title"].startswith("Infobox:")]
+        infobox = [c for c in hits if     c["section_title"].startswith("Infobox:")]
         return prose, infobox
 
     for h in _handles:
@@ -278,14 +288,20 @@ def search(query_text: str, top_k: int = 10,
             if not rrf_hits:
                 continue
 
-            top_score = rrf_hits[0]["faiss_score"]
+            rrf_prose, rrf_infobox = _split(rrf_hits)
+            if not rrf_prose:
+                continue
+
+            # Use top PROSE hit for expansion decisions — infobox hits come first
+            # in rrf_hits so rrf_hits[0] would be wrong when infobox scores high.
+            top_score = rrf_prose[0]["faiss_score"]
             expand_n  = 1 if top_score >= high_conf_thresh else 2
-            print(f"[complex] top faiss={top_score:.3f} → expanding {expand_n} article(s)",
+            print(f"[complex] top prose faiss={top_score:.3f} → expanding {expand_n} article(s)",
                   flush=True)
 
             expanded_ids: list[int] = []
             expanded_hits: list[dict] = []
-            for hit in rrf_hits:
+            for hit in rrf_prose:
                 aid = hit["article_id"]
                 if aid not in expanded_ids:
                     expanded_ids.append(aid)
@@ -302,7 +318,6 @@ def search(query_text: str, top_k: int = 10,
 
             # Fill cross-article slots from OTHER articles (prose only)
             seen_aids = set(expanded_ids)
-            rrf_prose, rrf_infobox = _split(rrf_hits)
             for hit in rrf_prose:
                 if len(final_prose) >= top_k:
                     break
@@ -320,11 +335,13 @@ def search(query_text: str, top_k: int = 10,
             rrf_prose, rrf_infobox = _split(rrf_hits)
             expansion_threshold = r.get("expansion_threshold", 0.75)
             expansion_top       = r.get("expansion_top_chunks", 2)
-            top_score = rrf_hits[0]["faiss_score"]
-            if top_score >= expansion_threshold:
+            # Use top PROSE score/article for expansion — not rrf_hits[0] which is infobox
+            top_prose_hit = rrf_prose[0] if rrf_prose else None
+            top_score = top_prose_hit["faiss_score"] if top_prose_hit else 0.0
+            if top_prose_hit and top_score >= expansion_threshold:
                 print(f"[balanced] top faiss={top_score:.3f} ≥ {expansion_threshold} "
                       f"→ expanding top article (prose only)", flush=True)
-                exp_prose = _expand_article(h, rrf_hits[0]["article_id"],
+                exp_prose = _expand_article(h, top_prose_hit["article_id"],
                                             query_vec, expansion_top,
                                             prose_only=True)
                 # Best expanded prose first, then remaining RRF prose
@@ -344,6 +361,16 @@ def search(query_text: str, top_k: int = 10,
     all_prose.sort(key=lambda x:   (x["faiss_score"], x["rrf_score"]), reverse=True)
     all_infobox.sort(key=lambda x: x["faiss_score"], reverse=True)
 
+    # Dedup prose by chunk_id — balanced expansion can produce the same chunk twice
+    # (expanded top chunk may already appear in rrf_prose)
+    seen_chunk_ids: set[int] = set()
+    deduped_prose = []
+    for c in all_prose:
+        if c["chunk_id"] not in seen_chunk_ids:
+            seen_chunk_ids.add(c["chunk_id"])
+            deduped_prose.append(c)
+    all_prose = deduped_prose
+
     # Cross-ZIM false positive filter: use the TRUE top score across both buckets
     # (expansion prose often scores lower than infobox, so we must check infobox too)
     prose_top   = all_prose[0]["faiss_score"]   if all_prose   else 0.0
@@ -358,19 +385,19 @@ def search(query_text: str, top_k: int = 10,
             top_zim = all_prose[0]["zim_name"]
 
         threshold = global_top - 0.05
-        all_prose   = [h for h in all_prose
-                       if h["zim_name"] == top_zim or h["faiss_score"] >= threshold]
-        all_infobox = [h for h in all_infobox
-                       if h["zim_name"] == top_zim or h["faiss_score"] >= threshold]
+        all_prose   = [c for c in all_prose
+                       if c["zim_name"] == top_zim or c["faiss_score"] >= threshold]
+        all_infobox = [c for c in all_infobox
+                       if c["zim_name"] == top_zim or c["faiss_score"] >= threshold]
 
     # Truncate long prose chunks (e.g. multi-paragraph leads stored as one block)
-    for h in all_prose:
-        if len(h["text"]) > _MAX_PROSE_CHARS:
-            h["text"] = h["text"][:_MAX_PROSE_CHARS].rsplit(" ", 1)[0] + " …"
+    for chunk in all_prose:
+        if len(chunk["text"]) > _MAX_PROSE_CHARS:
+            chunk["text"] = chunk["text"][:_MAX_PROSE_CHARS].rsplit(" ", 1)[0] + " …"
 
     # Infobox only for articles that also have prose — never from unrelated articles
-    prose_article_ids = {h["article_id"] for h in all_prose[:top_k]}
-    all_infobox = [h for h in all_infobox if h["article_id"] in prose_article_ids]
+    prose_article_ids = {chunk["article_id"] for chunk in all_prose[:top_k]}
+    all_infobox = [chunk for chunk in all_infobox if chunk["article_id"] in prose_article_ids]
 
     # Prose fills top_k slots; infobox appended as additive context (global cap)
     return all_prose[:top_k] + all_infobox[:_INFOBOX_GLOBAL_MAX]
