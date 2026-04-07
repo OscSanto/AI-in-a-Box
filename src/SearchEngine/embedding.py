@@ -14,7 +14,7 @@ from fastembed import TextEmbedding as _FE
 from SearchEngine.config import EMBED_HF_MODEL
 
 print(f"⏳ Loading embed model {EMBED_HF_MODEL!r} ...", flush=True)
-_fe_model = _FE(EMBED_HF_MODEL)
+_fe_model = _FE(EMBED_HF_MODEL, threads=4)  # use all 4 Pi cores for ONNX inference
 list(_fe_model.embed(["warmup"]))   # warm ONNX runtime before first real request
 print("✅ Embed model ready", flush=True)
 
