@@ -15,6 +15,7 @@ import sys
 import argparse
 from pathlib import Path
 
+import faiss
 from zim_indexer import embed
 from zim_indexer import index as faiss_index
 from zim_indexer.db import (
@@ -137,26 +138,100 @@ def expand_article(out_dir: Path, title: str):
     print(f"Done. {len(chunk_ids)} new vectors added.", flush=True)
 
 
+def _fmt_bytes(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
 def status(out_dir: Path):
     db_path  = out_dir / "data.db"
     idx_path = out_dir / "faiss.index"
+
     if not db_path.exists():
         print(f"No index found at {out_dir}")
         return
+
+    # ── File sizes ────────────────────────────────────────────────────────────
+    db_size  = db_path.stat().st_size  if db_path.exists()  else 0
+    idx_size = idx_path.stat().st_size if idx_path.exists() else 0
+    print(f"\n{'─'*50}")
+    print(f"  Directory : {out_dir}")
+    print(f"  data.db   : {_fmt_bytes(db_size)}")
+    print(f"  faiss.idx : {_fmt_bytes(idx_size)  if idx_size else 'not found'}")
+    print(f"  Total     : {_fmt_bytes(db_size + idx_size)}")
+
+    # ── SQLite stats ──────────────────────────────────────────────────────────
     con = open_db(db_path)
     s   = stats(con)
+
+    embedded_pct = (s["embedded"] / s["chunks"] * 100) if s["chunks"] else 0
+    pending      = s["chunks"] - s["embedded"]
+    avg_per_art  = s["chunks"] / s["articles"] if s["articles"] else 0
+
+    # Chunk text length stats
+    lens = con.execute(
+        "SELECT MIN(LENGTH(text)), MAX(LENGTH(text)), AVG(LENGTH(text)) FROM chunks"
+    ).fetchone()
+    min_len, max_len, avg_len = lens
+
+    # Section distribution — how many articles have N chunks
+    phase1_full = con.execute(
+        "SELECT COUNT(*) FROM ("
+        "  SELECT article_id FROM chunks WHERE chunk_index < 3"
+        "  GROUP BY article_id HAVING COUNT(*) >= 3"
+        ")"
+    ).fetchone()[0]
+
+    # Per-article total text size stats
+    art_lens = con.execute(
+        "SELECT MIN(art_len), MAX(art_len), AVG(art_len) FROM ("
+        "  SELECT SUM(LENGTH(text)) as art_len FROM chunks GROUP BY article_id"
+        ")"
+    ).fetchone()
+    art_min, art_max, art_avg = art_lens
+
+    # Top 5 most-chunked articles (with total text size)
+    top_articles = con.execute(
+        "SELECT a.title, COUNT(c.id) as n, SUM(LENGTH(c.text)) as total_chars "
+        "FROM chunks c JOIN articles a ON c.article_id = a.id "
+        "GROUP BY c.article_id ORDER BY n DESC LIMIT 5"
+    ).fetchall()
+
     con.close()
-    idx_vectors = 0
-    if idx_path.exists():
-        idx = faiss_index.load_or_create(idx_path)
-        idx_vectors = idx.ntotal
-    pending = s["chunks"] - s["embedded"]
-    pct     = (s["embedded"] / s["chunks"] * 100) if s["chunks"] else 0
-    print(f"  Articles:  {s['articles']:>8,}")
-    print(f"  Chunks:    {s['chunks']:>8,}  (all extracted sections)")
-    print(f"  Embedded:  {s['embedded']:>8,}  ({pct:.1f}%)")
-    print(f"  Pending:   {pending:>8,}")
-    print(f"  FAISS:     {idx_vectors:>8,}  vectors on disk")
+
+    print(f"\n  {'─'*20} Articles {'─'*20}")
+    print(f"  Total articles     : {s['articles']:>8,}")
+    print(f"  Avg chunks/article : {avg_per_art:>8.1f}")
+    print(f"  Articles w/ ≥3 chunks (Phase 1 complete) : {phase1_full:,}")
+    print(f"  Text per article   :  min={art_min:,}  avg={int(art_avg):,}  max={art_max:,} chars")
+
+    print(f"\n  {'─'*20} Chunks {'─'*22}")
+    print(f"  Total chunks       : {s['chunks']:>8,}  (all extracted sections)")
+    print(f"  Embedded (in FAISS): {s['embedded']:>8,}  ({embedded_pct:.1f}%)")
+    print(f"  Pending (Phase 2)  : {pending:>8,}  (text stored, no vector yet)")
+    print(f"  Chunk text length  :  min={min_len:,}  avg={int(avg_len):,}  max={max_len:,} chars")
+
+    print(f"\n  {'─'*20} FAISS {'─'*23}")
+    if idx_path.exists() and idx_size > 100:
+        idx         = faiss_index.load_or_create(idx_path)
+        inner       = faiss.downcast_index(idx.index)
+        idx_type    = type(inner).__name__
+        nprobe_info = f"  nprobe={inner.nprobe}" if hasattr(inner, "nprobe") else ""
+        print(f"  Vectors            : {idx.ntotal:>8,}")
+        print(f"  Index type         : {idx_type}{nprobe_info}")
+        print(f"  Dims               : {inner.d}")
+        bytes_per_vec = idx_size / idx.ntotal if idx.ntotal else 0
+        print(f"  Bytes/vector       : {bytes_per_vec:.1f}")
+    else:
+        print(f"  (no FAISS index found)")
+
+    if top_articles:
+        print(f"\n  {'─'*20} Top articles by chunk count {'─'*5}")
+        for title, n, total_chars in top_articles:
+            print(f"  {n:>4} chunks  {total_chars:>8,} chars  {title}")
 
 
 def _print_results(hits: list, verbose: bool = False):
