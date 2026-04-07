@@ -53,18 +53,6 @@ ai_mode:
     similarity_threshold: 0.97
 
 zims:
-  - name: "wikipedia_en_all_maxi_2025-08"
-    count: 5
-    has_images: true
-  - name: "wikipedia_en_100_2026-01"
-    count: 5
-    has_images: true
-  - name: "wikipedia_en_astronomy_maxi_2025-11"
-    count: 5
-    has_images: true
-  - name: "wikipedia_en_top_nopic_2025-12"
-    count: 5
-    has_images: false
   - name: "wikipedia_en_100_nopic_2026-01"
     count: 5
     has_images: false
