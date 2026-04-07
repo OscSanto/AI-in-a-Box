@@ -11,8 +11,8 @@ retrieval:
 
 llm_model: "qwen2.5:0.5b"
 llm_options:
-  num_predict: 200
-  num_ctx: 2048
+  num_predict: 150
+  num_ctx: 1024
   temperature: 0.1
   keep_alive: "25m"
 
