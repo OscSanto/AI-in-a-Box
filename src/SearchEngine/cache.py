@@ -131,3 +131,15 @@ def db_set_ai_mode(query: str, query_vec: np.ndarray, answer: str):
     )
     con.commit()
     con.close()
+
+
+def db_clear_ai() -> dict:
+    """Delete all AI-generated answers. Search cache is kept."""
+    con = sqlite3.connect(_DB_PATH)
+    ai_count      = con.execute("SELECT COUNT(*) FROM ai_cache").fetchone()[0]
+    ai_mode_count = con.execute("SELECT COUNT(*) FROM ai_mode_cache").fetchone()[0]
+    con.execute("DELETE FROM ai_cache")
+    con.execute("DELETE FROM ai_mode_cache")
+    con.commit()
+    con.close()
+    return {"deleted": {"ai_cache": ai_count, "ai_mode_cache": ai_mode_count}}

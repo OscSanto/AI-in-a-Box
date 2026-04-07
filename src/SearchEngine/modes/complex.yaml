@@ -6,11 +6,13 @@
 # Result:  semantically best chunks from the full article, not just Phase 1
 
 retrieval:
-  faiss_candidates: 80       # FAISS top-k pool (top_k × 8)
-  bm25_candidates: 50        # BM25 title matches (top_k × 5)
-  top_k: 5                   # chunks returned to LLM
-  expand_top_n_articles: 1   # how many top RRF articles to fully expand
-  expansion_top_chunks: 5    # chunks to pick from expanded article sections
+  faiss_candidates: 80       # FAISS top-k pool
+  bm25_candidates: 50        # BM25 title matches
+  top_k: 5                   # total chunks returned to LLM
+  expansion_top_chunks: 5    # chunks to pick per expanded article
+  high_conf_threshold: 0.75  # faiss_score above this → expand 1 article (confident)
+                             # below this → expand 2 articles (hedge)
+  cross_article_slots: 2     # slots reserved for non-expanded RRF hits (other articles)
 
 llm_model: "qwen2.5:0.5b"
 llm_options:

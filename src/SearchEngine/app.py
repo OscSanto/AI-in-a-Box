@@ -39,6 +39,7 @@ from SearchEngine.cache import (
     db_get_ai, db_set_ai,
     db_suggest,
     db_ai_mode_lookup, db_set_ai_mode,
+    db_clear_ai,
 )
 from SearchEngine.embedding import embed_ai_mode
 from SearchEngine.search import get_or_run_pipeline, full_search_pipeline
@@ -178,6 +179,13 @@ async def results_page():
 @app.get("/images-page")
 async def images_page():
     return FileResponse(os.path.join(_CFG_DIR, "static", "images.html"))
+
+
+@app.get("/cache/clear")
+async def cache_clear():
+    result = db_clear_ai()
+    print(f"[cache] cleared — {result}", flush=True)
+    return JSONResponse(result)
 
 
 @app.get("/zim-sources")

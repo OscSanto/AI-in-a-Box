@@ -177,11 +177,11 @@ def status(out_dir: Path):
     ).fetchone()
     min_len, max_len, avg_len = lens
 
-    # Section distribution — how many articles have N chunks
+    # Section distribution — how many articles have at least 1 embedded chunk
     phase1_full = con.execute(
         "SELECT COUNT(*) FROM ("
-        "  SELECT article_id FROM chunks WHERE chunk_index < 3"
-        "  GROUP BY article_id HAVING COUNT(*) >= 3"
+        "  SELECT article_id FROM chunks WHERE embedded = 1"
+        "  GROUP BY article_id HAVING COUNT(*) >= 1"
         ")"
     ).fetchone()[0]
 
@@ -205,7 +205,7 @@ def status(out_dir: Path):
     print(f"\n  {'─'*20} Articles {'─'*20}")
     print(f"  Total articles     : {s['articles']:>8,}")
     print(f"  Avg chunks/article : {avg_per_art:>8.1f}")
-    print(f"  Articles w/ ≥3 chunks (Phase 1 complete) : {phase1_full:,}")
+    print(f"  Articles w/ ≥1 embedded chunk            : {phase1_full:,}")
     print(f"  Text per article   :  min={art_min:,}  avg={int(art_avg):,}  max={art_max:,} chars")
 
     print(f"\n  {'─'*20} Chunks {'─'*22}")

@@ -100,8 +100,29 @@
       ⚡ Device GPU
     </label>
     <span id="webgpu-status">checking…</span>
+    <button id="clear-cache-btn" title="Clear all saved AI answers" style="
+      background: #313244; border: none; color: #cdd6f4; border-radius: 5px;
+      padding: 3px 8px; font-size: 11px; cursor: pointer; margin-left: 6px;
+    ">Clear Cache</button>
   `;
   document.body.appendChild(bar);
+
+  // ── Clear cache button ────────────────────────────────────────────────────
+  document.getElementById("clear-cache-btn").addEventListener("click", async () => {
+    const btn = document.getElementById("clear-cache-btn");
+    btn.textContent = "Clearing…";
+    btn.disabled = true;
+    try {
+      const res  = await fetch("/cache/clear");
+      const data = await res.json();
+      const n    = (data.deleted?.ai_cache || 0) + (data.deleted?.ai_mode_cache || 0);
+      btn.textContent = `Cleared (${n})`;
+      setTimeout(() => { btn.textContent = "Clear Cache"; btn.disabled = false; }, 2000);
+    } catch (e) {
+      btn.textContent = "Error";
+      setTimeout(() => { btn.textContent = "Clear Cache"; btn.disabled = false; }, 2000);
+    }
+  });
 
   const progressDiv = document.createElement("div");
   progressDiv.id = "webgpu-progress";

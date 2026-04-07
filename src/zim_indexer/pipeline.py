@@ -38,7 +38,9 @@ _SKIP_RE = re.compile(
 _SKIP_NS = {"Category", "Template", "Portal", "File", "Help", "Special",
              "Talk", "Wikipedia", "User", "MediaWiki", "Module"}
 
-_PHASE1_CHUNKS = 3    # lead + up to 2 sections
+_PHASE1_INFOBOX = 10  # infobox rows guaranteed embedded, independent of prose count
+_PHASE1_PROSE   = 14  # section paragraphs guaranteed embedded (+ 1 lead = 25 total)
+_PHASE1_CHUNKS  = 1 + _PHASE1_INFOBOX + _PHASE1_PROSE  # = 25, used by --embed query
 _EMBED_BATCH   = 16   # small batches — keeps ONNX + vector RAM low
 _SAVE_EVERY    = 128  # write FAISS to disk every N chunks (lose less on crash)
 
@@ -51,6 +53,10 @@ def _output_dir(zim_path: Path) -> Path:
 
 def _build_chunk_text(title: str, section_title: str, text: str) -> str:
     return f"Article: {title}\nSection: {section_title}\nText: {text}"
+
+
+def _build_infobox_text(title: str, header: str, label: str, value: str) -> str:
+    return f"Article: {title}\nInfobox: {header}\nFact: {label} = {value}"
 
 
 def _is_redirect(entry) -> bool:
@@ -86,9 +92,16 @@ def run_extract(zim_path: Path):
     skipped      = 0
     already_done = 0
     new_articles = 0
+    total_chunks = 0
 
     for i in range(total):
         seen += 1
+
+        if seen % 50_000 == 0:
+            elapsed = time.time() - t0
+            print(f"  [scan] {seen:,}/{total:,} entries scanned | "
+                  f"new={new_articles:,} skip={skipped:,} | {seen/elapsed:.0f} entries/s",
+                  flush=True)
 
         try:
             entry = archive._get_entry_by_id(i)
@@ -130,32 +143,68 @@ def run_extract(zim_path: Path):
 
         url = path if path.startswith("A/") else f"A/{path}"
 
-        all_chunks = [{"section_title": "Lead", "chunk_index": 0,
-                       "text": _build_chunk_text(title, "Lead", parsed["lead"])}]
-        for j, sec in enumerate(parsed["sections"], start=1):
-            all_chunks.append({"section_title": sec["title"], "chunk_index": j,
-                                "text": _build_chunk_text(title, sec["title"], sec["text"])})
+        # Build infobox and prose lists before assigning chunk_index,
+        # so we can give each an independent guaranteed phase-1 budget.
+        infobox_chunks = []
+        if parsed.get("infobox"):
+            ib     = parsed["infobox"]
+            header = ib["header"]
+            for row in ib["rows"]:
+                infobox_chunks.append({
+                    "section_title": f"Infobox: {header}",
+                    "text":          _build_infobox_text(title, header,
+                                                         row["label"], row["value"]),
+                })
+
+        prose_chunks = []
+        for sec in parsed["sections"]:
+            for para in sec["paragraphs"]:
+                prose_chunks.append({
+                    "section_title": sec["title"],
+                    "text":          _build_chunk_text(title, sec["title"], para),
+                })
+
+        # Ordering: lead(0) | phase-1 infobox(1..10) | phase-1 prose(11..24)
+        #           | remaining prose | remaining infobox
+        # chunk_index < _PHASE1_CHUNKS (25) → embedded=1 in --embed step.
+        # Both types get their own guaranteed slots regardless of how many the other has.
+        ordered = (
+            [{"section_title": "Lead",
+              "text": _build_chunk_text(title, "Lead", parsed["lead"])}]
+            + infobox_chunks[:_PHASE1_INFOBOX]
+            + prose_chunks[:_PHASE1_PROSE]
+            + prose_chunks[_PHASE1_PROSE:]
+            + infobox_chunks[_PHASE1_INFOBOX:]
+        )
+
+        all_chunks = [
+            {**c, "chunk_index": i} for i, c in enumerate(ordered)
+        ]
 
         article_id = db.insert_article(con, title, url, str(zim_path))
         db.insert_chunks(con, article_id, all_chunks)
         new_articles += 1
+        total_chunks += len(all_chunks)
 
         # Release BeautifulSoup tree — it holds a lot of C-level memory
         del html, parsed, all_chunks
 
+        # Batch commit every 500 articles — much faster than per-article commits
+        if new_articles % 500 == 0:
+            con.commit()
+
         if new_articles % 1000 == 0:
-            gc.collect()   # return accumulated BS4 memory to OS
+            gc.collect()
             elapsed = time.time() - t0
-            s       = db.stats(con)
             print(f"  [{seen:>8,}/{total:,}] new={new_articles:,} skip={skipped:,} "
-                  f"resume={already_done:,} | chunks={s['chunks']:,} "
+                  f"resume={already_done:,} | chunks={total_chunks:,} "
                   f"| {new_articles/elapsed:.1f} art/s", flush=True)
 
-    s = db.stats(con)
+    con.commit()  # final commit for any remaining buffered articles
     con.close()
     elapsed = time.time() - t0
     print(f"\n[extract] Done in {elapsed/60:.1f} min — "
-          f"{s['articles']:,} articles, {s['chunks']:,} chunks", flush=True)
+          f"{new_articles:,} articles, {total_chunks:,} chunks", flush=True)
 
 
 # ── Step 2: Embed ─────────────────────────────────────────────────────────────

@@ -28,8 +28,12 @@ from zim_indexer.db import (
 from SearchEngine.config import CFG
 from SearchEngine.embedding import _st_encode as _encode
 
-_RRF_K         = 60
-_MIN_FAISS_SCORE = 0.55   # chunks below this cosine score are semantically irrelevant
+_RRF_K                  = 60
+_MIN_FAISS_SCORE        = 0.45  # min cosine score for regular chunks
+_INFOBOX_MIN_SCORE      = 0.80  # raised: short infobox text is easy false positive
+_INFOBOX_MAX_PER_ARTICLE = 3    # hard cap per article
+_INFOBOX_GLOBAL_MAX     = 5     # hard cap across all articles
+_MAX_PROSE_CHARS        = 1200  # truncate long chunks (e.g. multi-paragraph leads)
 ZIM_INDEX_BASE = Path(CFG.get("zim_index_base", "/library/zims/content"))
 _MODES_DIR     = Path(__file__).parent / "modes"
 
@@ -120,50 +124,79 @@ def _rrf_search(h: _ZimHandle, query_vec: np.ndarray,
     }
     top_cids = sorted(rrf, key=rrf.__getitem__, reverse=True)[:top_k * 2]
 
-    hits  = []
-    seen: set[tuple] = set()
-    for cid in top_cids:
-        if len(hits) >= top_k:
-            break
+    # Scan all RRF candidates — two separate buckets
+    regular_hits: list[dict] = []   # lead + section paragraphs, up to top_k
+    infobox_hits: list[dict] = []   # infobox rows passing threshold, additive
+    seen_regular: set[tuple] = set()
+    infobox_count: dict[str, int] = {}
+
+    all_cids_sorted = sorted(rrf, key=rrf.__getitem__, reverse=True)
+
+    for cid in all_cids_sorted:
+
         chunk = get_chunk_by_id(h.con, cid)
         if not chunk:
             continue
         faiss_score = faiss_score_map.get(cid, 0.0)
         bm25_rank   = bm25_rank_map.get(cid, n)
-        # Keep if FAISS score is decent (semantic match),
-        # OR BM25 ranked the article #1 (exact title match) with some FAISS signal.
-        if faiss_score < _MIN_FAISS_SCORE and not (bm25_rank == 0 and faiss_score > 0.3):
-            continue
-        key = (chunk["title"], chunk["section_title"])
-        if key in seen:
-            continue
-        seen.add(key)
-        hits.append({
-            **chunk,
-            "rrf_score":   round(rrf[cid], 6),
-            "faiss_score": round(faiss_score, 4),
-            "zim_name":    h.name,
-        })
-    return hits
+
+        if chunk["section_title"].startswith("Infobox:"):
+            # Infobox: only include if cosine similarity is high enough to be relevant
+            if faiss_score < _INFOBOX_MIN_SCORE:
+                continue
+            art = chunk["title"]
+            if infobox_count.get(art, 0) >= _INFOBOX_MAX_PER_ARTICLE:
+                continue
+            infobox_count[art] = infobox_count.get(art, 0) + 1
+            infobox_hits.append({
+                **chunk,
+                "rrf_score":   round(rrf[cid], 6),
+                "faiss_score": round(faiss_score, 4),
+                "zim_name":    h.name,
+            })
+        else:
+            # Regular chunks: fill top_k slots
+            if len(regular_hits) >= top_k:
+                continue
+            if faiss_score < _MIN_FAISS_SCORE and not (bm25_rank == 0 and faiss_score > 0.3):
+                continue
+            key = (chunk["title"], chunk["section_title"])
+            if key in seen_regular:
+                continue
+            seen_regular.add(key)
+            regular_hits.append({
+                **chunk,
+                "rrf_score":   round(rrf[cid], 6),
+                "faiss_score": round(faiss_score, 4),
+                "zim_name":    h.name,
+            })
+
+    # Infobox rows first (short facts), then regular prose chunks
+    return infobox_hits + regular_hits
 
 
 # ── Complex: on-the-fly full article expansion ────────────────────────────────
 
 def _expand_article(h: _ZimHandle, article_id: int,
-                    query_vec: np.ndarray, top_n: int) -> list[dict]:
+                    query_vec: np.ndarray, top_n: int,
+                    prose_only: bool = False) -> list[dict]:
     """
-    Fetch ALL stored sections for article_id from SQLite,
-    embed them in one batch, cosine-rank, return top_n best chunks.
+    Fetch phase-1 embedded chunks for article_id, cosine-rank, return top_n.
+    prose_only=True skips infobox rows (they're handled in a separate bucket).
     """
     rows = h.con.execute(
         "SELECT c.id, c.section_title, c.chunk_index, c.text, a.title, a.url "
         "FROM chunks c JOIN articles a ON c.article_id = a.id "
-        "WHERE c.article_id = ? ORDER BY c.chunk_index",
+        "WHERE c.article_id = ? AND c.embedded = 1 ORDER BY c.chunk_index",
         (article_id,),
     ).fetchall()
 
     if not rows:
         return []
+
+    article_title = rows[0][4]
+    print(f"[expand] '{article_title}' — {len(rows)} embedded chunks"
+          f"{' (prose only)' if prose_only else ''}", flush=True)
 
     texts = [r[3] for r in rows]
     vecs  = _encode(texts)                       # (N, 384) L2-normalised
@@ -176,7 +209,10 @@ def _expand_article(h: _ZimHandle, article_id: int,
     for sim, row in ranked:
         if len(hits) >= top_n:
             break
-        key = row[2]  # section_title
+        section = row[1]
+        if prose_only and section.startswith("Infobox:"):
+            continue                              # infobox handled by RRF bucket
+        key = section  # dedup so one section doesn't fill all slots
         if key in seen:
             continue
         seen.add(key)
@@ -221,18 +257,32 @@ def search(query_text: str, top_k: int = 10,
 
     query_vec = _encode([query_text])[0]   # (384,) L2-normalised
 
-    all_hits: list[dict] = []
+    # Keep prose (lead + section paragraphs) and infobox rows as separate buckets.
+    # Prose fills top_k slots; infobox is additive on top — never crowds out prose.
+    all_prose:   list[dict] = []
+    all_infobox: list[dict] = []
+
+    def _split(hits: list[dict]) -> tuple[list[dict], list[dict]]:
+        prose   = [h for h in hits if not h["section_title"].startswith("Infobox:")]
+        infobox = [h for h in hits if     h["section_title"].startswith("Infobox:")]
+        return prose, infobox
 
     for h in _handles:
         if mode == "complex":
-            expand_n       = r.get("expand_top_n_articles", 1)
-            expansion_top  = r.get("expansion_top_chunks",  5)
+            expansion_top     = r.get("expansion_top_chunks",       5)
+            high_conf_thresh  = r.get("high_conf_threshold",     0.75)
+            cross_article_slots = r.get("cross_article_slots",      2)
 
-            # Stage 1: RRF to find the top article(s)
             rrf_hits = _rrf_search(h, query_vec, faiss_n, bm25_n,
                                    query_text, top_k)
+            if not rrf_hits:
+                continue
 
-            # Stage 2: expand top N articles with full on-the-fly embedding
+            top_score = rrf_hits[0]["faiss_score"]
+            expand_n  = 1 if top_score >= high_conf_thresh else 2
+            print(f"[complex] top faiss={top_score:.3f} → expanding {expand_n} article(s)",
+                  flush=True)
+
             expanded_ids: list[int] = []
             expanded_hits: list[dict] = []
             for hit in rrf_hits:
@@ -240,28 +290,87 @@ def search(query_text: str, top_k: int = 10,
                 if aid not in expanded_ids:
                     expanded_ids.append(aid)
                     expanded_hits.extend(
-                        _expand_article(h, aid, query_vec, expansion_top)
+                        _expand_article(h, aid, query_vec, expansion_top,
+                                        prose_only=True)
                     )
                 if len(expanded_ids) >= expand_n:
                     break
 
-            # Fill remaining slots from RRF hits (other articles)
+            expanded_hits.sort(key=lambda x: x["faiss_score"], reverse=True)
+            expansion_slots = max(top_k - cross_article_slots, top_k // 2)
+            final_prose: list[dict] = expanded_hits[:expansion_slots]
+
+            # Fill cross-article slots from OTHER articles (prose only)
             seen_aids = set(expanded_ids)
-            for hit in rrf_hits:
+            rrf_prose, rrf_infobox = _split(rrf_hits)
+            for hit in rrf_prose:
+                if len(final_prose) >= top_k:
+                    break
                 if hit["article_id"] not in seen_aids:
-                    expanded_hits.append(hit)
+                    final_prose.append(hit)
 
-            # Sort by faiss_score (expansion chunks) then rrf_score
-            expanded_hits.sort(
-                key=lambda x: (x["faiss_score"], x["rrf_score"]), reverse=True
-            )
-            all_hits.extend(expanded_hits[:top_k])
+            all_prose.extend(final_prose)
+            all_infobox.extend(rrf_infobox)
 
-        else:
+        elif mode == "balanced":
+            rrf_hits = _rrf_search(h, query_vec, faiss_n, bm25_n,
+                                   query_text, top_k)
+            if not rrf_hits:
+                continue
+            rrf_prose, rrf_infobox = _split(rrf_hits)
+            expansion_threshold = r.get("expansion_threshold", 0.75)
+            expansion_top       = r.get("expansion_top_chunks", 2)
+            top_score = rrf_hits[0]["faiss_score"]
+            if top_score >= expansion_threshold:
+                print(f"[balanced] top faiss={top_score:.3f} ≥ {expansion_threshold} "
+                      f"→ expanding top article (prose only)", flush=True)
+                exp_prose = _expand_article(h, rrf_hits[0]["article_id"],
+                                            query_vec, expansion_top,
+                                            prose_only=True)
+                # Best expanded prose first, then remaining RRF prose
+                all_prose.extend(exp_prose + rrf_prose)
+            else:
+                all_prose.extend(rrf_prose)
+            all_infobox.extend(rrf_infobox)
+
+        else:  # fast
             hits = _rrf_search(h, query_vec, faiss_n, bm25_n,
                                query_text, top_k)
-            all_hits.extend(hits)
+            prose, infobox = _split(hits)
+            all_prose.extend(prose)
+            all_infobox.extend(infobox)
 
-    # Global sort when multiple ZIMs contribute
-    all_hits.sort(key=lambda x: (x["faiss_score"], x["rrf_score"]), reverse=True)
-    return all_hits[:top_k]
+    # Sort each bucket by score independently
+    all_prose.sort(key=lambda x:   (x["faiss_score"], x["rrf_score"]), reverse=True)
+    all_infobox.sort(key=lambda x: x["faiss_score"], reverse=True)
+
+    # Cross-ZIM false positive filter: use the TRUE top score across both buckets
+    # (expansion prose often scores lower than infobox, so we must check infobox too)
+    prose_top   = all_prose[0]["faiss_score"]   if all_prose   else 0.0
+    infobox_top = all_infobox[0]["faiss_score"] if all_infobox else 0.0
+    global_top  = max(prose_top, infobox_top)
+
+    if global_top >= 0.80:
+        # Determine the dominant ZIM (whichever produced the top score)
+        if infobox_top >= prose_top and all_infobox:
+            top_zim = all_infobox[0]["zim_name"]
+        else:
+            top_zim = all_prose[0]["zim_name"]
+
+        threshold = global_top - 0.05
+        all_prose   = [h for h in all_prose
+                       if h["zim_name"] == top_zim or h["faiss_score"] >= threshold]
+        all_infobox = [h for h in all_infobox
+                       if h["zim_name"] == top_zim or h["faiss_score"] >= threshold]
+
+    # Truncate long prose chunks (e.g. multi-paragraph leads stored as one block)
+    for h in all_prose:
+        if len(h["text"]) > _MAX_PROSE_CHARS:
+            h["text"] = h["text"][:_MAX_PROSE_CHARS].rsplit(" ", 1)[0] + " …"
+
+    # Infobox only for articles that also have prose — never from unrelated articles
+    prose_article_ids = {h["article_id"] for h in all_prose[:top_k]}
+    all_infobox = [h for h in all_infobox if h["article_id"] in prose_article_ids]
+
+    # Prose fills top_k slots; infobox appended as additive context (global cap)
+    return all_prose[:top_k] + all_infobox[:_INFOBOX_GLOBAL_MAX]

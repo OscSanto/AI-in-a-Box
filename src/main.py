@@ -177,6 +177,17 @@ async def chat_completions(request: Request):
                                      "Cache-Control": "no-cache"})
 
 
+# ── Cache clear — proxy to SearchEngine ──────────────────────────────────────
+@app.get("/cache/clear")
+async def cache_clear():
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"{SE_BASE}/cache/clear")
+        return Response(r.content, media_type="application/json")
+    except Exception as e:
+        return Response(f'{{"error":"{e}"}}', media_type="application/json")
+
+
 # ── Metrics — proxy to SearchEngine ──────────────────────────────────────────
 @app.get("/metrics/dashboard")
 async def metrics_dashboard():

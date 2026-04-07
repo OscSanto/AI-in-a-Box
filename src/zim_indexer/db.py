@@ -27,7 +27,7 @@ def insert_article(con: sqlite3.Connection, title: str, url: str, zim_path: str)
         "INSERT INTO articles (title, url, zim_path, indexed_at) VALUES (?, ?, ?, ?)",
         (title, url, zim_path, time.time()),
     )
-    con.commit()
+    # No commit here — caller batches commits every N articles
     return cur.lastrowid
 
 
@@ -37,14 +37,12 @@ def insert_chunks(con: sqlite3.Connection, article_id: int, chunks: list[dict]) 
     chunks: [{"section_title": str, "chunk_index": int, "text": str}, ...]
     """
     ids = []
-    for c in chunks:
-        cur = con.execute(
-            "INSERT INTO chunks (article_id, section_title, chunk_index, text, embedded) "
-            "VALUES (?, ?, ?, ?, 0)",
-            (article_id, c["section_title"], c["chunk_index"], c["text"]),
-        )
-        ids.append(cur.lastrowid)
-    con.commit()
+    con.executemany(
+        "INSERT INTO chunks (article_id, section_title, chunk_index, text, embedded) "
+        "VALUES (?, ?, ?, ?, 0)",
+        [(article_id, c["section_title"], c["chunk_index"], c["text"]) for c in chunks],
+    )
+    # No commit here — caller batches commits every N articles
     return ids
 
 
@@ -128,7 +126,7 @@ def title_search(con: sqlite3.Connection, query: str, limit: int = 30) -> list[t
 
 
 def get_chunks_for_article(con: sqlite3.Connection, article_id: int,
-                            max_chunk_index: int = 3) -> list[tuple[int, int]]:
+                            max_chunk_index: int = 100) -> list[tuple[int, int]]:
     """Returns [(chunk_id, chunk_index)] for embedded Phase 1 chunks of an article."""
     rows = con.execute(
         "SELECT id, chunk_index FROM chunks "
