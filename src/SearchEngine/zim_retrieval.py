@@ -122,8 +122,9 @@ def _rrf_search(h: _ZimHandle, query_vec: np.ndarray,
               1 / (_RRF_K + bm25_rank_map.get(cid, n)))
         for cid in all_cids
     }
-    # Only scan the top candidates — pruning here keeps DB lookups bounded
-    top_cids = sorted(rrf, key=rrf.__getitem__, reverse=True)[:top_k * 4]
+    # Scan enough candidates to reliably fill both prose and infobox buckets.
+    # Never fewer than faiss_n so we don't discard FAISS results we already paid for.
+    top_cids = sorted(rrf, key=rrf.__getitem__, reverse=True)[:max(top_k * 8, faiss_n)]
 
     # Scan top RRF candidates — two separate buckets
     regular_hits: list[dict] = []   # lead + section paragraphs, up to top_k

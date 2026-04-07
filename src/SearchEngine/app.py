@@ -121,7 +121,8 @@ async def ai_answer(q: str):
         full_answer = ""
         stream = ollama_client.chat(
             model=LLM_MODEL,
-            options=LLM_OPTIONS,
+            options={k: v for k, v in LLM_OPTIONS.items() if k != "keep_alive"},
+            keep_alive=LLM_OPTIONS.get("keep_alive", "15m"),
             messages=[
                 {"role": "system", "content": AI_PROMPT},
                 {"role": "user",   "content": f"Context:\n{context}\n\nQuestion: {q}"},
@@ -333,7 +334,8 @@ async def ai_mode_answer(q: str, mode: str = "balanced"):
             full_answer = ""
             stream = ollama_client.chat(
                 model=_llm_model,
-                options=_llm_options,
+                options={k: v for k, v in _llm_options.items() if k != "keep_alive"},
+                keep_alive=_llm_options.get("keep_alive", "15m"),
                 messages=[
                     {"role": "system", "content": _system_prompt},
                     {"role": "user",   "content": f"Context:\n{context}\n\nQuestion: {q}"},
