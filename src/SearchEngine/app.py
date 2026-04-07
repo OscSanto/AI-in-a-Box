@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import asyncio
 import json
 import threading
+import httpx
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, BackgroundTasks
@@ -143,7 +144,9 @@ async def ai_answer(q: str):
         if full_answer:
             db_set_ai(q, full_answer)
 
-    return StreamingResponse(_generate(), media_type="text/plain")
+    return StreamingResponse(_generate(), media_type="text/plain",
+                            headers={"X-Accel-Buffering": "no",
+                                     "Cache-Control": "no-cache"})
 
 
 @app.get("/images")
@@ -202,6 +205,16 @@ async def zim_sources(q: str, mode: str = "balanced"):
     return JSONResponse({"sources": sources})
 
 
+async def _wake_ollama(model: str):
+    """Fire-and-forget: tell Ollama to load the model now so it's warm by the time we need it."""
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            await c.post("http://localhost:11434/api/generate",
+                         json={"model": model, "keep_alive": "25m", "prompt": ""})
+    except Exception:
+        pass
+
+
 @app.get("/ai-mode")
 async def ai_mode_answer(q: str, mode: str = "balanced"):
     """
@@ -211,6 +224,11 @@ async def ai_mode_answer(q: str, mode: str = "balanced"):
     3. Miss → progressive RAG (title embed → semantic rank → first-para rerank → chunks) → LLM stream
     4. Save (query_vec, answer) to ai_mode_cache
     """
+    # Kick off Ollama model load immediately — overlaps with embed+search below
+    _mode_cfg  = zim_retrieval._MODE_CFGS.get(mode, {})
+    _wake_model = _mode_cfg.get("llm_model", AI_MODE_LLM_MODEL)
+    asyncio.create_task(_wake_ollama(_wake_model))
+
     def _generate():
         is_first = False
         ev: threading.Event | None = None
@@ -339,7 +357,9 @@ async def ai_mode_answer(q: str, mode: str = "balanced"):
                     _ai_mode_results.pop(q, None)
                 ev.set()
 
-    return StreamingResponse(_generate(), media_type="text/plain")
+    return StreamingResponse(_generate(), media_type="text/plain",
+                            headers={"X-Accel-Buffering": "no",
+                                     "Cache-Control": "no-cache"})
 
 
 # ─── Metrics ──────────────────────────────────────────────────────────────────

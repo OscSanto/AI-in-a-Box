@@ -10,6 +10,7 @@ to the SearchEngine server (port 8000).
 Plain-text streaming from SearchEngine is reformatted to OpenAI SSE so the
 WebUI receives the format it expects.
 """
+import asyncio
 import json
 import os
 import time
@@ -121,24 +122,35 @@ async def chat_completions(request: Request):
         }) + "\n\n"
 
     async def _stream():
-        # For ZIM modes, fetch sources first then stream the answer
+        # For ZIM modes, kick off sources + answer stream in parallel.
+        # Sources are fetched concurrently so we don't pay an extra round-trip
+        # before the first token.
         if mode in ("fast", "balanced", "complex"):
-            try:
-                async with httpx.AsyncClient(timeout=10) as client:
-                    resp = await client.get(f"{SE_BASE}/zim-sources",
-                                            params={"q": query, "mode": mode})
-                    if resp.status_code == 200:
-                        sources = resp.json().get("sources", [])
-                        if sources:
-                            yield _sse_sources(sources)
-            except Exception:
-                pass  # sources are optional — don't block the answer
+            sources_task = asyncio.create_task(
+                httpx.AsyncClient(timeout=15).get(
+                    f"{SE_BASE}/zim-sources", params={"q": query, "mode": mode}
+                )
+            )
+        else:
+            sources_task = None
 
         try:
             async with httpx.AsyncClient(timeout=300) as client:
                 async with client.stream("GET", f"{SE_BASE}{se_path}",
                                          params=se_params) as resp:
+                    first_chunk = True
                     async for chunk in resp.aiter_bytes():
+                        # Emit sources before the first token (but don't wait for them)
+                        if first_chunk and sources_task is not None:
+                            first_chunk = False
+                            if sources_task.done():
+                                try:
+                                    sr = sources_task.result()
+                                    sources = sr.json().get("sources", [])
+                                    if sources:
+                                        yield _sse_sources(sources)
+                                except Exception:
+                                    pass
                         text = chunk.decode("utf-8", errors="replace")
                         if text:
                             yield _sse(text)
@@ -146,11 +158,23 @@ async def chat_completions(request: Request):
             yield _sse(f"[Error contacting SearchEngine: {e}]", finish=True)
             yield "data: [DONE]\n\n"
             return
+        finally:
+            # If sources arrived after streaming started, send them now
+            if sources_task is not None and not sources_task.cancelled():
+                try:
+                    sr = await sources_task
+                    sources = sr.json().get("sources", [])
+                    if sources:
+                        yield _sse_sources(sources)
+                except Exception:
+                    pass
 
         yield _sse("", finish=True)
         yield "data: [DONE]\n\n"
 
-    return StreamingResponse(_stream(), media_type="text/event-stream")
+    return StreamingResponse(_stream(), media_type="text/event-stream",
+                            headers={"X-Accel-Buffering": "no",
+                                     "Cache-Control": "no-cache"})
 
 
 # ── Metrics — proxy to SearchEngine ──────────────────────────────────────────
