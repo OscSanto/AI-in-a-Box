@@ -110,14 +110,14 @@ def extract(html: str) -> dict | None:
             break
         if getattr(el, "name", None) == "p":
             text = _clean_text(el.get_text(" "))
-            if len(text) >= 50:
+            if len(text) >= 50 and not text.endswith(":"):
                 lead_parts.append(text)
     lead = " ".join(lead_parts)
 
     if not lead:
         return None
 
-    # ── Sections: each <p> is its own paragraph entry ────────────────────────
+    # ── Sections: each <p>/<ul>/<ol> is its own paragraph entry ─────────────
     sections:       list[dict]  = []
     current_title:  str | None  = None
     current_paras:  list[str]   = []
@@ -128,14 +128,26 @@ def extract(html: str) -> dict | None:
         if current_title.lower() not in _JUNK_SECTIONS:
             sections.append({"title": current_title, "paragraphs": current_paras})
 
-    for el in content.find_all(["h2", "h3", "p"], recursive=True):
+    def _list_text(el) -> str:
+        """Join top-level <li> items into a readable sentence-like string."""
+        items = [_clean_text(li.get_text(" ")) for li in el.find_all("li", recursive=False)]
+        items = [i for i in items if i]
+        return "; ".join(items)
+
+    for el in content.find_all(["h2", "h3", "p", "ul", "ol"], recursive=True):
         if el.name in ("h2", "h3"):
             _flush()
             current_title = _clean_text(el.get_text(" "))
             current_paras = []
         elif el.name == "p":
             text = _clean_text(el.get_text(" "))
-            if len(text) >= 30:
+            # Skip orphaned list-header paragraphs (end with ":" — their list
+            # content follows in a <ul>/<ol> and is captured separately below)
+            if len(text) >= 60 and not text.endswith(":"):
+                current_paras.append(text)
+        elif el.name in ("ul", "ol") and current_title is not None:
+            text = _list_text(el)
+            if len(text) >= 60:
                 current_paras.append(text)
 
     _flush()

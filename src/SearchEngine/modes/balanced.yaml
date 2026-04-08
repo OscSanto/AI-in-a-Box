@@ -1,15 +1,9 @@
-# Balanced mode — FAISS + BM25 + RRF, Phase 1 chunks only
-#
-# Stage 1: FAISS semantic search + FTS5 BM25 title → RRF fusion
-# Stage 2: best Phase 1 pre-embedded chunks from top articles
-# Result:  top chunks passed to LLM
+# Balanced mode — FAISS + BM25 + weighted reranker (default)
 
 retrieval:
-  faiss_candidates: 60       # FAISS top-k pool
-  bm25_candidates: 30        # BM25 title matches
-  top_k: 5                   # chunks returned to LLM
-  expansion_threshold: 0.75  # min faiss_score to trigger full-article expansion
-  expansion_top_chunks: 2    # best chunks from expanded article
+  faiss_candidates: 60
+  bm25_candidates: 30
+  top_k: 5
 
 llm_model: "qwen2.5:0.5b"
 llm_options:

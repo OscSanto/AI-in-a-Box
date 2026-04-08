@@ -104,14 +104,17 @@ async def chat_completions(request: Request):
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
 
-    def _sse(text: str, finish: bool = False) -> str:
-        return "data: " + json.dumps({
+    def _sse(text: str, finish: bool = False, se_metrics: dict | None = None) -> str:
+        payload: dict = {
             "id": chat_id, "object": "chat.completion.chunk",
             "created": created, "model": "searchengine",
             "choices": [{"index": 0,
                          "delta": {"content": text},
                          "finish_reason": "stop" if finish else None}],
-        }) + "\n\n"
+        }
+        if se_metrics:
+            payload["se_metrics"] = se_metrics
+        return "data: " + json.dumps(payload) + "\n\n"
 
     def _sse_sources(sources: list) -> str:
         return "data: " + json.dumps({
@@ -169,7 +172,21 @@ async def chat_completions(request: Request):
                 except Exception:
                     pass
 
-        yield _sse("", finish=True)
+        # Fetch metrics for THIS generation and embed in the finish event
+        se_metrics: dict = {}
+        try:
+            async with httpx.AsyncClient(timeout=5) as mc:
+                mr = await mc.get(f"{SE_BASE}/api/metrics")
+                records = mr.json().get("llm", {}).get("records", [])
+                # Last "answer" role record belongs to this generation
+                for rec in reversed(records):
+                    if rec.get("role") == "answer":
+                        se_metrics = rec
+                        break
+        except Exception:
+            pass
+
+        yield _sse("", finish=True, se_metrics=se_metrics or None)
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(_stream(), media_type="text/event-stream",

@@ -7,6 +7,7 @@
 		ModelsSelector
 	} from '$lib/components/app';
 	import ChatMessageThinkingBlock from './ChatMessageThinkingBlock.svelte';
+	import SearchEngineMetrics from './SearchEngineMetrics.svelte';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
@@ -300,6 +301,9 @@
 			<pre class="raw-output">{messageContent || ''}</pre>
 		{:else}
 			<MarkdownContent content={visibleMessageContent || ''} attachments={message.extra} />
+		{/if}
+		{#if message.model === 'searchengine' && message.seMetrics}
+			<SearchEngineMetrics metrics={message.seMetrics} />
 		{/if}
 	{:else}
 		<div class="text-sm whitespace-pre-wrap">

@@ -72,6 +72,7 @@ export class ChatService {
 			onReasoningChunk,
 			onToolCallChunk,
 			onSources,
+			onSeMetrics,
 			onModel,
 			onTimings,
 			// Tools for function calling
@@ -252,7 +253,8 @@ export class ChatService {
 					onModel,
 					onTimings,
 					conversationId,
-					signal
+					signal,
+					onSeMetrics
 				);
 
 				return;
@@ -337,7 +339,8 @@ export class ChatService {
 		onModel?: (model: string) => void,
 		onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void,
 		conversationId?: string,
-		abortSignal?: AbortSignal
+		abortSignal?: AbortSignal,
+		onSeMetrics?: (metrics: Record<string, unknown>) => void
 	): Promise<void> {
 		const reader = response.body?.getReader();
 
@@ -431,6 +434,9 @@ export class ChatService {
 							const sources = (parsed as Record<string, unknown>).sources as
 								| { title: string; url: string; snippet: string }[]
 								| undefined;
+							const seMetrics = (parsed as Record<string, unknown>).se_metrics as
+								| Record<string, unknown>
+								| undefined;
 
 							const chunkModel = ChatService.extractModelName(parsed);
 							if (chunkModel && !modelEmitted) {
@@ -449,6 +455,10 @@ export class ChatService {
 
 							if (sources?.length && !abortSignal?.aborted) {
 								onSources?.(sources);
+							}
+
+							if (seMetrics && !abortSignal?.aborted) {
+								onSeMetrics?.(seMetrics);
 							}
 
 							if (content) {

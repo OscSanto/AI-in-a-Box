@@ -137,10 +137,10 @@ async def ai_answer(q: str):
                     return
             token = chunk["message"]["content"]
             full_answer += token
-            yield token
             if getattr(chunk, "done", False):
                 try: llm_metrics.record("answer", LLM_MODEL, _llm_extract_timings(chunk, LLM_MODEL))
                 except Exception: pass
+            yield token
 
         mark("7_done", f"{len(full_answer)} chars generated")
         if full_answer:
@@ -296,7 +296,7 @@ async def ai_mode_answer(q: str, mode: str = "balanced"):
 
                 mark("3_zim_chunks", f"{len(zim_hits)} chunks from ZIM index")
                 for i, h in enumerate(zim_hits):
-                    print(f"  [{i+1:02d}] rrf={h['rrf_score']:.5f} faiss={h['faiss_score']:.3f}"
+                    print(f"  [{i+1:02d}] rerank={h['rerank_score']:.5f} faiss={h['faiss_score']:.3f}"
                           f"  {h['title']!r} §{h['section_title']!r}", flush=True)
 
                 top_chunks = [h["text"] for h in zim_hits]
@@ -345,10 +345,10 @@ async def ai_mode_answer(q: str, mode: str = "balanced"):
             for chunk in stream:
                 token = chunk["message"]["content"]
                 full_answer += token
-                yield token
                 if getattr(chunk, "done", False):
                     try: llm_metrics.record("answer", _llm_model, _llm_extract_timings(chunk, _llm_model))
                     except Exception: pass
+                yield token
 
             if full_answer:
                 mark("8_done", f"{len(full_answer)} chars generated")

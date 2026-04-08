@@ -25,3 +25,9 @@ CREATE TABLE IF NOT EXISTS chunks (
 
 CREATE INDEX IF NOT EXISTS idx_chunks_article   ON chunks(article_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_embedded  ON chunks(embedded);
+
+-- Tracks FTS5 chunk index state so init_fts() can do incremental updates.
+CREATE TABLE IF NOT EXISTS fts_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);

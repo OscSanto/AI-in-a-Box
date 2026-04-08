@@ -243,8 +243,7 @@ def run_embed(zim_path: Path):
     idx = faiss_index.load_or_create(idx_path)
 
     total_pending = con.execute(
-        "SELECT COUNT(*) FROM chunks WHERE embedded = 0 AND chunk_index < ?",
-        (_PHASE1_CHUNKS,),
+        "SELECT COUNT(*) FROM chunks WHERE embedded = 0",
     ).fetchone()[0]
 
     if not total_pending:
@@ -272,9 +271,9 @@ def run_embed(zim_path: Path):
         train_ids       = []
         train_vecs_list = []
         cur = con.execute(
-            "SELECT id, text FROM chunks WHERE embedded = 0 AND chunk_index < ? "
+            "SELECT id, text FROM chunks WHERE embedded = 0 "
             "ORDER BY id LIMIT ?",
-            (_PHASE1_CHUNKS, train_n),
+            (train_n,),
         )
         while True:
             rows = cur.fetchmany(_EMBED_BATCH)
@@ -302,9 +301,9 @@ def run_embed(zim_path: Path):
 
     while True:
         batch = con.execute(
-            "SELECT id, text FROM chunks WHERE embedded = 0 AND chunk_index < ? "
+            "SELECT id, text FROM chunks WHERE embedded = 0 "
             "ORDER BY id LIMIT ?",
-            (_PHASE1_CHUNKS, _EMBED_BATCH),
+            (_EMBED_BATCH,),
         ).fetchall()
 
         if not batch:

@@ -67,6 +67,7 @@ export interface ChatStreamCallbacks {
 	onToolCallChunk?: (chunk: string) => void;
 	onAttachments?: (extras: DatabaseMessageExtra[]) => void;
 	onSources?: (sources: { title: string; url: string; snippet: string }[]) => void;
+	onSeMetrics?: (metrics: Record<string, unknown>) => void;
 	onModel?: (model: string) => void;
 	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
 	onComplete?: (

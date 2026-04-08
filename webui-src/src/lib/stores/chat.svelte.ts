@@ -610,6 +610,10 @@ class ChatStore {
 		const abortController = this.getOrCreateAbortController(assistantMessage.convId);
 		const streamCallbacks: ChatStreamCallbacks = {
 			onSources: (sources) => setArticles(sources),
+			onSeMetrics: (metrics) => {
+				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
+				conversationsStore.updateMessageAtIndex(idx, { seMetrics: metrics });
+			},
 			onChunk: (chunk: string) => appendContentChunk(chunk),
 			onReasoningChunk: (chunk: string) => appendReasoningChunk(chunk),
 			onToolCallChunk: (chunk: string) => {

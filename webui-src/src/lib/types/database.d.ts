@@ -73,6 +73,7 @@ export interface DatabaseMessage {
 	extra?: DatabaseMessageExtra[];
 	timings?: ChatMessageTimings;
 	model?: string;
+	seMetrics?: Record<string, unknown>;
 }
 
 export type ExportedConversation = {
