@@ -281,9 +281,9 @@ async def ai_mode_answer(q: str, mode: str = "balanced"):
                 # ── FAISS path: embed once, reuse vector for cache + search ──
                 # Expansion now uses FAISS reconstruct() — no re-embedding at query time.
                 query_vec = embed_ai_mode(q)
+                mark("1a_embed", f"vec={query_vec.shape}")
                 zim_hits  = zim_retrieval.search(q, _top_k, mode, query_vec=query_vec)
-                mark("1_embed_and_search",
-                     f"vec={query_vec.shape} | {len(zim_hits)} ZIM chunks ({mode})")
+                mark("1b_search", f"{len(zim_hits)} ZIM chunks ({mode})")
 
                 cached = db_ai_mode_lookup(query_vec)
                 mark("2_cache_lookup", "hit" if cached else "miss")
