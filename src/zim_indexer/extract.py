@@ -8,9 +8,10 @@ Wikipedia ZIM HTML structure:
 
 Returns:
   {
-    "lead":     str,                                       # joined lead paragraphs
+    "lead":     str,                                       # joined lead units
+    "lead_paragraphs": [str],                              # semantic lead units
     "infobox":  {"header": str, "rows": [{"label": str, "value": str}]} | None,
-    "sections": [{"title": str, "paragraphs": [str]}, ...],  # paragraph-level splits
+    "sections": [{"title": str, "paragraphs": [str]}, ...],  # section-bounded semantic units
   }
 """
 import re
@@ -25,11 +26,67 @@ _JUNK_SECTIONS = {
 }
 
 _CITE_RE = re.compile(r"\[\w{0,8}\]")
+_SENT_RE = re.compile(r"(?<=[.!?])\s+(?=[\"'(\[]?[A-Z0-9])")
 
 
 def _clean_text(text: str) -> str:
     text = _CITE_RE.sub("", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _split_sentences(text: str) -> list[str]:
+    text = (text or "").strip()
+    if not text:
+        return []
+    parts = [p.strip() for p in _SENT_RE.split(text) if p.strip()]
+    return parts or [text]
+
+
+def _semantic_units(texts: list[str], soft_chars: int = 420, min_chars: int = 50) -> list[str]:
+    """
+    Produce section-bounded text units:
+      - keep existing paragraph/list boundaries
+      - split very long items on sentence boundaries
+      - merge only short adjacent units within the same section
+    """
+    units: list[str] = []
+    for text in texts:
+        text = (text or "").strip()
+        if not text:
+            continue
+        if len(text) <= soft_chars:
+            units.append(text)
+            continue
+
+        sentences = _split_sentences(text)
+        if len(sentences) <= 1:
+            units.append(text)
+            continue
+
+        buf: list[str] = []
+        buf_len = 0
+        for sent in sentences:
+            sent_len = len(sent) + (1 if buf else 0)
+            if buf and buf_len + sent_len > soft_chars:
+                units.append(" ".join(buf).strip())
+                buf = [sent]
+                buf_len = len(sent)
+            else:
+                buf.append(sent)
+                buf_len += sent_len
+        if buf:
+            units.append(" ".join(buf).strip())
+
+    merged: list[str] = []
+    i = 0
+    while i < len(units):
+        current = units[i]
+        if len(current) < min_chars and i + 1 < len(units):
+            current = (current + " " + units[i + 1]).strip()
+            i += 1
+        merged.append(current)
+        i += 1
+    return merged
 
 
 def _extract_infobox(soup) -> dict | None:
@@ -112,7 +169,8 @@ def extract(html: str) -> dict | None:
             text = _clean_text(el.get_text(" "))
             if len(text) >= 50 and not text.endswith(":"):
                 lead_parts.append(text)
-    lead = " ".join(lead_parts)
+    lead_units = _semantic_units(lead_parts)
+    lead = " ".join(lead_units)
 
     if not lead:
         return None
@@ -126,7 +184,7 @@ def extract(html: str) -> dict | None:
         if current_title is None or not current_paras:
             return
         if current_title.lower() not in _JUNK_SECTIONS:
-            sections.append({"title": current_title, "paragraphs": current_paras})
+            sections.append({"title": current_title, "paragraphs": _semantic_units(current_paras)})
 
     def _list_text(el) -> str:
         """Join top-level <li> items into a readable sentence-like string."""
@@ -152,4 +210,4 @@ def extract(html: str) -> dict | None:
 
     _flush()
 
-    return {"lead": lead, "infobox": infobox_data, "sections": sections}
+    return {"lead": lead, "lead_paragraphs": lead_units, "infobox": infobox_data, "sections": sections}

@@ -38,9 +38,10 @@ _SKIP_RE = re.compile(
 _SKIP_NS = {"Category", "Template", "Portal", "File", "Help", "Special",
              "Talk", "Wikipedia", "User", "MediaWiki", "Module"}
 
+_PHASE1_LEAD    = 3   # semantic lead units guaranteed embedded
 _PHASE1_INFOBOX = 10  # infobox rows guaranteed embedded, independent of prose count
-_PHASE1_PROSE   = 14  # section paragraphs guaranteed embedded (+ 1 lead = 25 total)
-_PHASE1_CHUNKS  = 1 + _PHASE1_INFOBOX + _PHASE1_PROSE  # = 25, used by --embed query
+_PHASE1_PROSE   = 12  # section units guaranteed embedded (+ lead + infobox = 25 total)
+_PHASE1_CHUNKS  = _PHASE1_LEAD + _PHASE1_INFOBOX + _PHASE1_PROSE  # = 25
 _EMBED_BATCH   = 16   # small batches — keeps ONNX + vector RAM low
 _SAVE_EVERY    = 128  # write FAISS to disk every N chunks (lose less on crash)
 
@@ -143,8 +144,17 @@ def run_extract(zim_path: Path):
 
         url = path if path.startswith("A/") else f"A/{path}"
 
-        # Build infobox and prose lists before assigning chunk_index,
-        # so we can give each an independent guaranteed phase-1 budget.
+        # Build lead / infobox / prose lists before assigning chunk_index,
+        # so each content type gets independent guaranteed phase-1 coverage.
+        lead_units = [
+            {
+                "section_title": "Lead",
+                "text": _build_chunk_text(title, "Lead", para),
+            }
+            for para in (parsed.get("lead_paragraphs") or [parsed["lead"]])
+            if para and para.strip()
+        ]
+
         infobox_chunks = []
         if parsed.get("infobox"):
             ib     = parsed["infobox"]
@@ -175,15 +185,15 @@ def run_extract(zim_path: Path):
                                                            _sec["paras"][_round]),
                     })
 
-        # Ordering: lead(0) | phase-1 infobox(1..10) | phase-1 prose(11..24)
-        #           | remaining prose | remaining infobox
+        # Ordering: phase-1 lead | phase-1 infobox | phase-1 prose
+        #           | remaining lead | remaining prose | remaining infobox
         # chunk_index < _PHASE1_CHUNKS (25) → embedded=1 in --embed step.
         # Both types get their own guaranteed slots regardless of how many the other has.
         ordered = (
-            [{"section_title": "Lead",
-              "text": _build_chunk_text(title, "Lead", parsed["lead"])}]
+            lead_units[:_PHASE1_LEAD]
             + infobox_chunks[:_PHASE1_INFOBOX]
             + prose_chunks[:_PHASE1_PROSE]
+            + lead_units[_PHASE1_LEAD:]
             + prose_chunks[_PHASE1_PROSE:]
             + infobox_chunks[_PHASE1_INFOBOX:]
         )

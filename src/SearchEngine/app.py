@@ -16,6 +16,7 @@ import asyncio
 import json
 import threading
 import httpx
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, BackgroundTasks
@@ -60,6 +61,67 @@ _ai_cancelled_lock : threading.Lock = threading.Lock()
 _ai_mode_inflight_lock = threading.Lock()
 _ai_mode_inflight: dict[str, threading.Event] = {}
 _ai_mode_results:  dict[str, str]             = {}
+_LINE_SPLIT_RE = re.compile(r"\n{2,}")
+
+
+def _compact_chunk_text(text: str, max_chars: int) -> str:
+    text = (text or "").strip()
+    if len(text) <= max_chars:
+        return text
+
+    parts = [p.strip() for p in _LINE_SPLIT_RE.split(text) if p.strip()]
+    kept: list[str] = []
+    total = 0
+    for part in parts:
+        add = len(part) + (2 if kept else 0)
+        if kept and total + add > max_chars:
+            break
+        if not kept and len(part) > max_chars:
+            return part[:max_chars].rsplit(" ", 1)[0] + " …"
+        kept.append(part)
+        total += add
+
+    compact = "\n\n".join(kept).strip()
+    if len(compact) > max_chars:
+        compact = compact[:max_chars].rsplit(" ", 1)[0] + " …"
+    return compact
+
+
+def _compact_context(chunks: list[str], mode: str, num_ctx: int) -> tuple[list[str], int]:
+    """
+    Keep prompt size aligned with the selected model context window.
+    Fast mode uses the tightest cap to preserve time-to-first-token.
+    """
+    if not chunks:
+        return [], 0
+
+    if mode == "fast":
+        total_budget = min(1400, max(700, int(num_ctx * 2.6)))
+        per_chunk = max(320, total_budget // max(1, len(chunks)))
+    elif mode == "balanced":
+        total_budget = min(3200, max(1400, int(num_ctx * 3.0)))
+        per_chunk = max(500, total_budget // max(1, len(chunks)))
+    else:
+        total_budget = min(7000, max(2200, int(num_ctx * 3.4)))
+        per_chunk = max(700, total_budget // max(1, len(chunks)))
+
+    compacted = [_compact_chunk_text(c, per_chunk) for c in chunks]
+    context = "\n\n".join(compacted)
+    if len(context) <= total_budget:
+        return compacted, len(context)
+
+    trimmed: list[str] = []
+    used = 0
+    for c in compacted:
+        add = len(c) + (2 if trimmed else 0)
+        if trimmed and used + add > total_budget:
+            break
+        if not trimmed and len(c) > total_budget:
+            one = _compact_chunk_text(c, total_budget)
+            return [one], len(one)
+        trimmed.append(c)
+        used += add
+    return trimmed, used
 
 
 # ─── FastAPI app ──────────────────────────────────────────────────────────────
@@ -325,8 +387,10 @@ async def ai_mode_answer(q: str, mode: str = "balanced"):
                     yield "No relevant content found."
                     return
 
+            _num_ctx = int(_llm_options.get("num_ctx", 1024))
+            top_chunks, context_len = _compact_context(top_chunks, mode, _num_ctx)
             context = "\n\n".join(top_chunks)
-            mark("8_llm_start", f"context={len(context)} chars | model={_llm_model} | mode={mode}")
+            mark("8_llm_start", f"context={context_len} chars | model={_llm_model} | mode={mode}")
             print("─" * 60, flush=True)
             print(context, flush=True)
             print("─" * 60, flush=True)

@@ -6,6 +6,7 @@ rag_pipeline_advanced — progressive: title embed → semantic title rank →
                         first-para rerank → full chunk pipeline on winners only
 """
 import numpy as np
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from retrieval.kiwix_client import fetch_article_sections
@@ -16,18 +17,98 @@ from SearchEngine.config import RAG, AI_MODE_CFG, NAV_RE
 from SearchEngine.embedding import embed, embed_batch_ai_mode, embedder, ai_mode_embedder
 from SearchEngine.keywords import extract_keywords
 
+_SENT_RE = re.compile(r"(?<=[.!?])\s+(?=[\"'(\[]?[A-Z0-9])")
 
-def build_chunks(title: str, sections: list) -> list:
-    use_overlap = RAG.get("chunk_overlap", True)
-    min_chars   = RAG.get("min_paragraph_chars", 50)
-    all_paras   = [(sec["section"], p) for sec in sections for p in sec["paragraphs"]]
+
+def _split_sentences(text: str) -> list[str]:
+    text = (text or "").strip()
+    if not text:
+        return []
+    parts = [p.strip() for p in _SENT_RE.split(text) if p.strip()]
+    return parts or [text]
+
+
+def _section_kind(section: str) -> str:
+    sec = (section or "").strip().lower()
+    if sec == "introduction":
+        return "lead"
+    if any(k in sec for k in ("history", "background", "overview", "summary")):
+        return "overview"
+    if any(k in sec for k in ("references", "external links", "see also", "notes")):
+        return "support"
+    return "body"
+
+
+def _semantic_units(paragraphs: list[str], soft_chars: int, min_chars: int) -> list[str]:
+    """
+    Build chunkable units from paragraph text while preserving semantic boundaries:
+    - never cross section boundaries here
+    - split long paragraphs on sentence boundaries
+    - merge very short adjacent units inside the same section
+    """
+    units: list[str] = []
+    for para in paragraphs:
+        para = (para or "").strip()
+        if not para:
+            continue
+        if len(para) <= soft_chars:
+            units.append(para)
+            continue
+
+        sentences = _split_sentences(para)
+        if len(sentences) <= 1:
+            units.append(para)
+            continue
+
+        buf: list[str] = []
+        buf_len = 0
+        for sent in sentences:
+            sent_len = len(sent) + (1 if buf else 0)
+            if buf and buf_len + sent_len > soft_chars:
+                units.append(" ".join(buf).strip())
+                buf = [sent]
+                buf_len = len(sent)
+            else:
+                buf.append(sent)
+                buf_len += sent_len
+        if buf:
+            units.append(" ".join(buf).strip())
+
+    merged: list[str] = []
+    i = 0
+    while i < len(units):
+        current = units[i]
+        if len(current) < min_chars and i + 1 < len(units):
+            current = (current + " " + units[i + 1]).strip()
+            i += 1
+        merged.append(current)
+        i += 1
+    return merged
+
+
+def _format_chunk(title: str, section: str, kind: str, unit_idx: int, unit_total: int,
+                  left: str, body: str, right: str) -> str:
+    structure = f"Structure: kind={kind}; position={unit_idx + 1}/{unit_total}"
+    text = f"{left}{body}{right}".strip()
+    return f"[{title} | {section}]\n{structure}\n{text}"
+
+
+def build_chunks(title: str, sections: list, chunk_cfg: dict | None = None) -> list:
+    cfg         = chunk_cfg or RAG
+    use_overlap = cfg.get("chunk_overlap", True)
+    min_chars   = cfg.get("min_paragraph_chars", 50)
+    soft_chars  = cfg.get("max_chunk_chars", 800)
     chunks = []
-    for i, (section, para) in enumerate(all_paras):
-        left  = (last_sentence(all_paras[i - 1][1]) + " ") if i > 0 and use_overlap else ""
-        right = (" " + first_sentence(all_paras[i + 1][1])) if i < len(all_paras) - 1 and use_overlap else ""
-        chunk = f"[{title} | {section}]\n{left}{para}{right}"
-        if len(para) >= min_chars:
-            chunks.append(chunk)
+    for sec in sections:
+        section = sec["section"]
+        kind = _section_kind(section)
+        units = _semantic_units(sec.get("paragraphs") or [], soft_chars, min_chars)
+        for i, unit in enumerate(units):
+            if len(unit) < min_chars:
+                continue
+            left  = (last_sentence(units[i - 1]) + " ") if i > 0 and use_overlap else ""
+            right = (" " + first_sentence(units[i + 1])) if i < len(units) - 1 and use_overlap else ""
+            chunks.append(_format_chunk(title, section, kind, i, len(units), left, unit, right))
     return chunks
 
 
@@ -80,7 +161,7 @@ def rag_pipeline(query: str, ranked_results: list, mark=None) -> tuple:
     all_chunks = []
     for art in top_articles:
         sections = sections_by_title.get(art["title"], [])
-        all_chunks.extend(build_chunks(art["title"], sections)[:max_per_article])
+        all_chunks.extend(build_chunks(art["title"], sections, RAG)[:max_per_article])
 
     if mark:
         mark("4_build_chunks", f"{len(all_chunks)} chunks")
@@ -131,8 +212,6 @@ def rag_pipeline_advanced(query: str, query_vec: np.ndarray, ranked_results: lis
     top_k           = AI_MODE_CFG.get("top_chunks", 8)
     max_chars       = AI_MODE_CFG.get("max_chunk_chars", 600)
     max_per_article = AI_MODE_CFG.get("max_chunks_per_article", 5)
-    use_overlap     = AI_MODE_CFG.get("chunk_overlap", True)
-    min_chars       = AI_MODE_CFG.get("min_paragraph_chars", 50)
 
     content_results = [r for r in ranked_results if not NAV_RE.search(r["title"])]
     candidates      = (content_results or ranked_results)[:n_candidates]
@@ -191,18 +270,8 @@ def rag_pipeline_advanced(query: str, query_vec: np.ndarray, ranked_results: lis
     # ── Stage D: full chunk pipeline on winners ───────────────────────────────
     all_chunks = []
     for art in winners:
-        sections  = sections_by_title.get(art["title"], [])
-        all_paras = [(sec["section"], p) for sec in sections for p in sec["paragraphs"]]
-        art_chunks = []
-        for i, (section, para) in enumerate(all_paras):
-            if len(art_chunks) >= max_per_article:
-                break
-            left  = (last_sentence(all_paras[i - 1][1]) + " ") if i > 0 and use_overlap else ""
-            right = (" " + first_sentence(all_paras[i + 1][1])) if i < len(all_paras) - 1 and use_overlap else ""
-            chunk = f"[{art['title']} | {section}]\n{left}{para}{right}"
-            if len(para) >= min_chars:
-                art_chunks.append(chunk)
-        all_chunks.extend(art_chunks)
+        sections = sections_by_title.get(art["title"], [])
+        all_chunks.extend(build_chunks(art["title"], sections, AI_MODE_CFG)[:max_per_article])
 
     if mark:
         mark("6_build_chunks", f"{len(all_chunks)} chunks from {len(winners)} articles")
