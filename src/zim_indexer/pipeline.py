@@ -156,13 +156,24 @@ def run_extract(zim_path: Path):
                                                          row["label"], row["value"]),
                 })
 
+        # Round-robin across sections: take 1 para from each section before
+        # taking a 2nd from any section.  This guarantees every section gets
+        # FAISS coverage in phase-1, even if the article has many sections.
+        _sec_lists = [
+            {"title": sec["title"], "paras": sec["paragraphs"]}
+            for sec in parsed["sections"]
+            if sec["paragraphs"]
+        ]
         prose_chunks = []
-        for sec in parsed["sections"]:
-            for para in sec["paragraphs"]:
-                prose_chunks.append({
-                    "section_title": sec["title"],
-                    "text":          _build_chunk_text(title, sec["title"], para),
-                })
+        max_depth = max((len(s["paras"]) for s in _sec_lists), default=0)
+        for _round in range(max_depth):
+            for _sec in _sec_lists:
+                if _round < len(_sec["paras"]):
+                    prose_chunks.append({
+                        "section_title": _sec["title"],
+                        "text":          _build_chunk_text(title, _sec["title"],
+                                                           _sec["paras"][_round]),
+                    })
 
         # Ordering: lead(0) | phase-1 infobox(1..10) | phase-1 prose(11..24)
         #           | remaining prose | remaining infobox

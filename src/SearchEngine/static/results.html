@@ -45,6 +45,13 @@ header{display:flex;align-items:center;padding:14px 20px;gap:16px;border-bottom:
 .ai-mode-badge{font-size:11px;font-weight:600;color:#1557b0;background:#d2e3fc;border-radius:10px;padding:3px 10px;margin-bottom:12px;display:inline-block}
 .ai-text{font-size:14px;color:#3c4043;line-height:1.65;margin-top:8px}
 .ai-mode-text{font-size:14px;color:#202124;line-height:1.75;margin-top:10px;white-space:pre-wrap}
+.ai-metrics{border-top:1px solid #e8eaed;margin-top:14px;padding-top:10px;display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center}
+.ai-metric{display:flex;flex-direction:column;gap:1px}
+.ai-metric-label{font-size:10px;color:#9aa0a6;text-transform:uppercase;letter-spacing:.04em}
+.ai-metric-val{font-size:12px;color:#3c4043;font-variant-numeric:tabular-nums;font-family:ui-monospace,monospace}
+.ai-warm{font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:#e6f4ea;color:#188038;align-self:center}
+.ai-cold{font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:#fce8e6;color:#d93025;align-self:center}
+.ai-limit{font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:#fef7e0;color:#ea8600;align-self:center}
 .cursor{display:inline-block;width:2px;height:14px;background:#1a73e8;margin-left:2px;animation:blink .7s infinite;vertical-align:middle}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
 .result{margin-bottom:28px}
@@ -104,11 +111,13 @@ footer{background:#f2f2f2;border-top:1px solid #e4e4e4;padding:14px 20px;font-si
   <div class="ai-mode-box" id="ai-mode-box" style="display:none">
     <span class="ai-mode-badge">✦ AI Mode</span>
     <div class="ai-mode-text" id="ai-mode-text"><span class="cursor"></span></div>
+    <div class="ai-metrics" id="ai-mode-metrics" style="display:none"></div>
   </div>
 
   <div class="ai-box" id="ai-box" style="display:none">
     <span class="ai-badge">✦ AI Answer</span>
     <div class="ai-text" id="ai-text"><span class="cursor"></span></div>
+    <div class="ai-metrics" id="ai-metrics" style="display:none"></div>
   </div>
   <div id="results">
     <div class="skeleton-item"><div class="sk sk-url"></div><div class="sk sk-title"></div><div class="sk sk-line"></div><div class="sk sk-line mid"></div></div>
@@ -288,27 +297,79 @@ function renderPage(page){
   window.scrollTo(0, 0);
 }
 
+async function showMetrics(wrapId, clientTtft_ms) {
+  try {
+    var res  = await fetch('/api/metrics');
+    var data = await res.json();
+    var records = data.llm && data.llm.records;
+    if (!records || !records.length) return;
+    var r = records[records.length - 1];
+
+    var fmt = function(s, unit) { return s != null ? s.toFixed(2) + unit : '—'; };
+
+    var ttft    = clientTtft_ms != null ? (clientTtft_ms / 1000).toFixed(2) + 's' : '—';
+    var retr    = (clientTtft_ms != null && r.prefill_s != null)
+                  ? Math.max(0, clientTtft_ms / 1000 - r.prefill_s).toFixed(2) + 's' : '—';
+    var prefill = fmt(r.prefill_s, 's');
+    var gen     = fmt(r.gen_s, 's');
+    var speed   = r.gen_tok_s != null ? r.gen_tok_s.toFixed(0) + ' tok/s' : '—';
+    var ctx     = r.prompt_tokens != null ? r.prompt_tokens + ' tok' : '—';
+    var out     = r.gen_tokens   != null ? r.gen_tokens    + ' tok' : '—';
+
+    var badge = r.was_cold
+      ? '<span class="ai-cold">● Cold</span>'
+      : '<span class="ai-warm">● Warm</span>';
+    var limit = r.hit_token_limit
+      ? '<span class="ai-limit">Truncated</span>' : '';
+
+    var metric = function(label, val) {
+      return '<span class="ai-metric">'
+           + '<span class="ai-metric-label">' + label + '</span>'
+           + '<span class="ai-metric-val">'   + val   + '</span>'
+           + '</span>';
+    };
+
+    var wrap = document.getElementById(wrapId);
+    if (!wrap) return;
+    wrap.innerHTML =
+      metric('TTFT',      ttft)    +
+      metric('Retrieval', retr)    +
+      metric('Prefill',   prefill) +
+      metric('Generate',  gen)     +
+      metric('Speed',     speed)   +
+      metric('Context',   ctx)     +
+      metric('Output',    out)     +
+      badge + limit;
+    wrap.style.display = 'flex';
+  } catch(e) { /* non-fatal */ }
+}
+
 async function streamAI(){
-  var box = document.getElementById('ai-box');
-  var textEl = document.getElementById('ai-text');
+  var box     = document.getElementById('ai-box');
+  var textEl  = document.getElementById('ai-text');
   box.style.display = 'block';
-  textEl.innerHTML = '<span class="cursor"></span>';
+  textEl.innerHTML  = '<span class="cursor"></span>';
+  document.getElementById('ai-metrics').style.display = 'none';
   aiController = new AbortController();
+  var fetchStart   = Date.now();
+  var firstTokenAt = null;
   try {
     var res = await fetch('/ai?q=' + encodeURIComponent(query), { signal: aiController.signal });
-    var reader = res.body.getReader();
+    var reader  = res.body.getReader();
     var decoder = new TextDecoder();
     var text = '';
     while(true){
       var result = await reader.read();
       if(result.done) break;
-      text += decoder.decode(result.value);
+      var chunk = decoder.decode(result.value);
+      if (chunk && firstTokenAt === null) firstTokenAt = Date.now();
+      text += chunk;
       textEl.innerHTML = text + '<span class="cursor"></span>';
     }
     textEl.innerHTML = text;
+    if (firstTokenAt !== null) showMetrics('ai-metrics', firstTokenAt - fetchStart);
   } catch(e) {
     if (e.name !== 'AbortError') throw e;
-    // Aborted by user switching to AI Mode — leave whatever text was streamed so far
     textEl.innerHTML = textEl.innerHTML.replace('<span class="cursor"></span>', '');
   } finally {
     aiController = null;
@@ -318,23 +379,28 @@ async function streamAI(){
 async function streamAIMode(){
   var textEl = document.getElementById('ai-mode-text');
   textEl.innerHTML = '<span class="cursor"></span>';
-  var res = await fetch('/ai-mode?q=' + encodeURIComponent(query));
-  var reader = res.body.getReader();
+  document.getElementById('ai-mode-metrics').style.display = 'none';
+  var fetchStart   = Date.now();
+  var firstTokenAt = null;
+  var res     = await fetch('/ai-mode?q=' + encodeURIComponent(query));
+  var reader  = res.body.getReader();
   var decoder = new TextDecoder();
   var text = '';
   while(true){
     var result = await reader.read();
     if(result.done) break;
-    text += decoder.decode(result.value);
-    textEl.textContent = text;  // plain text during streaming (pre-wrap handles newlines)
+    var chunk = decoder.decode(result.value);
+    if (chunk && firstTokenAt === null) firstTokenAt = Date.now();
+    text += chunk;
+    textEl.textContent = text;
   }
-  // On completion: render bullet points and bold as HTML
   textEl.innerHTML = text
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
     .replace(/^[-•] (.+)$/gm,'<li>$1</li>')
     .replace(/(<li>[\s\S]*?<\/li>)/g,'<ul>$1</ul>')
     .replace(/\n\n/g,'<br><br>');
+  if (firstTokenAt !== null) showMetrics('ai-mode-metrics', firstTokenAt - fetchStart);
 }
 
 doSearch();
