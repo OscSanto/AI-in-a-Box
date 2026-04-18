@@ -1,12 +1,9 @@
 """
-spaCy-based keyword extraction — no LLM cost, runs in <5ms.
+Regex-based keyword extraction — no LLM cost, runs in <1ms.
 
-Priority:
-  1. Question-pattern regex (who/what/where…, tell me about…) — topic verbatim
-  2. Named entities (GPE, ORG, PERSON, WORK_OF_ART…)
-  3. Prepositional objects — topic word after "about/on/of/regarding"
-  4. Non-filler noun chunks
-  5. Raw query fallback
+Strips question framing to isolate the topic for BM25 queries:
+  1. Question-pattern regex (who/what/where…, tell me about…) — returns topic verbatim
+  2. Raw query fallback
 """
 import re
 

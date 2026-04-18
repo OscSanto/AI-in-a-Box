@@ -93,6 +93,22 @@ def get_chunks_by_ids(con: sqlite3.Connection, chunk_ids: list[int]) -> list[dic
     ]
 
 
+def get_chunks_for_article(con: sqlite3.Connection,
+                           article_id: int,
+                           limit: int | None = None) -> list[tuple[int, str]]:
+    """Return embedded chunk IDs for one article in chunk order."""
+    sql = (
+        "SELECT id, section_title FROM chunks "
+        "WHERE article_id = ? AND embedded = 1 "
+        "ORDER BY chunk_index"
+    )
+    params: list[int] = [article_id]
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    return [(int(r[0]), r[1]) for r in con.execute(sql, params).fetchall()]
+
+
 # ── FTS helpers ───────────────────────────────────────────────────────────────
 
 def _para_text(text: str) -> str:
@@ -198,6 +214,17 @@ def title_search_scored(con: sqlite3.Connection,
         return [(r[0], float(r[1])) for r in rows]
     except Exception:
         return []
+
+
+def title_search(con: sqlite3.Connection,
+                 query: str,
+                 limit: int = 30) -> list[tuple[int, int]]:
+    """
+    Compatibility wrapper for the CLI retriever.
+    Returns [(article_id, one_based_rank), ...].
+    """
+    return [(article_id, rank) for rank, (article_id, _score)
+            in enumerate(title_search_scored(con, query, limit), start=1)]
 
 
 def chunk_text_search(con: sqlite3.Connection,

@@ -1,15 +1,23 @@
-# Balanced mode — FAISS + BM25 + weighted reranker (default)
+# Balanced mode — answer-sufficiency-first retrieval.
+# It may return fewer than top_k chunks when only a few chunks directly answer the query.
 
 retrieval:
   faiss_candidates: 60
   bm25_candidates: 30
   top_k: 5
+  answer_filter: true
 
-llm_model: "qwen2.5:0.5b"
+think: false   # retrieval already handles reasoning; thinking loops waste context
+
+# llm_model: inherit from _active_model (set via UI or config.yaml ai_mode.llm_model)
 llm_options:
-  num_predict: 150
+  num_predict: 3000 # 1-2 sentences ≈ 50-100 tokens
   num_ctx: 1024
   temperature: 0.1
   keep_alive: "25m"
 
 system_prompt: "prompts/ai_mode_balanced.md"
+
+caps:
+  num_predict: 800
+  temperature: 2.0

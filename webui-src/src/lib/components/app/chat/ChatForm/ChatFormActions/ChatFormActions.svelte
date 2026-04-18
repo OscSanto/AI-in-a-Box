@@ -14,14 +14,19 @@
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { activeMessages } from '$lib/stores/conversations.svelte';
-	import { pipelineMode, setPipelineMode, type PipelineMode } from '$lib/stores/pipelineMode.svelte';
+	import {
+		ragControls,
+		setRagMode,
+		type RagMode
+	} from '$lib/stores/ragControls.svelte';
 
-	let currentMode = $derived(pipelineMode());
+	let currentMode = $derived(ragControls().mode);
 
-	const MODES: { value: PipelineMode; label: string }[] = [
+	const MODES: { value: RagMode; label: string }[] = [
 		{ value: 'fast',     label: 'Fast'     },
 		{ value: 'balanced', label: 'Balanced' },
 		{ value: 'complex',  label: 'Complex'  },
+		{ value: 'chat',     label: 'Chat'     },
 	];
 
 	interface Props {
@@ -180,7 +185,7 @@
 				<button
 					type="button"
 					disabled={disabled}
-					onclick={() => setPipelineMode(m.value)}
+					onclick={() => setRagMode(m.value)}
 					class="rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors
 						{currentMode === m.value
 							? 'bg-primary text-primary-foreground shadow-sm'

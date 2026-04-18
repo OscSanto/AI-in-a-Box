@@ -1,4 +1,5 @@
 import type { ChatMessageTimings, ChatRole, ChatMessageType } from '$lib/types/chat';
+import type { ArticleSource } from '$lib/stores/articlesStore.svelte';
 import { AttachmentType } from '$lib/enums';
 
 export interface DatabaseConversation {
@@ -74,6 +75,7 @@ export interface DatabaseMessage {
 	timings?: ChatMessageTimings;
 	model?: string;
 	seMetrics?: Record<string, unknown>;
+	ragSources?: ArticleSource[];
 }
 
 export type ExportedConversation = {

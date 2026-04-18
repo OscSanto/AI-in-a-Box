@@ -1,5 +1,6 @@
 import type { ErrorDialogType } from '$lib/enums';
 import type { DatabaseMessageExtra } from './database';
+import type { ArticleSource } from '$lib/stores/articlesStore.svelte';
 
 export interface ChatUploadedFile {
 	id: string;
@@ -66,8 +67,9 @@ export interface ChatStreamCallbacks {
 	onReasoningChunk?: (chunk: string) => void;
 	onToolCallChunk?: (chunk: string) => void;
 	onAttachments?: (extras: DatabaseMessageExtra[]) => void;
-	onSources?: (sources: { title: string; url: string; snippet: string }[]) => void;
+	onSources?: (sources: ArticleSource[]) => void;
 	onSeMetrics?: (metrics: Record<string, unknown>) => void;
+	onBackend?: (backend: string) => void;
 	onModel?: (model: string) => void;
 	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
 	onComplete?: (

@@ -3,7 +3,6 @@ Central configuration — loaded once at import time.
 All other modules import from here instead of re-reading config.yaml.
 """
 import os
-import re
 import yaml
 import ollama
 
@@ -24,22 +23,8 @@ def _load_prompt(rel_path: str) -> str:
 
 CFG = _load_cfg()
 
-BASE_URL  = CFG.get("base_url", "http://box")
-NAV_RE    = re.compile(r"^(List(s)? of|Index of|Outline of|Portal:|Category:)|\(disambiguation\)$", re.I)
-
 EMBED_HF_MODEL = CFG.get("embed_hf_model", "Snowflake/snowflake-arctic-embed-xs")
-LLM_MODEL      = CFG.get("llm_model", "smollm2:360m")
-LLM_OPTIONS    = CFG.get("llm_options", {})
-ZIMS           = CFG.get("zims", [])
-RAG            = CFG.get("rag", {})
-
-_SEARCH_CFG        = CFG.get("search", {})
-SEARCH_MAX_RESULTS = _SEARCH_CFG.get("max_results", 25)
-TITLE_WEIGHT_FLOOR = _SEARCH_CFG.get("title_weight_floor", 0.2)
-
-AI_PROMPT        = _load_prompt(RAG.get("system_prompt", "prompts/ai.md"))
 AI_MODE_CFG      = CFG.get("ai_mode", {})
-AI_MODE_PROMPT   = _load_prompt(AI_MODE_CFG.get("system_prompt", "prompts/ai_mode.md"))
 
 AI_MODE_LLM_MODEL   = AI_MODE_CFG.get("llm_model", "smollm2:360m")
 AI_MODE_LLM_OPTIONS = AI_MODE_CFG.get("llm_options", {})

@@ -1,0 +1,595 @@
+"""
+Chat completions and RAG pipeline.
+
+Implements POST /v1/chat/completions with three paths:
+  - "chat" mode: direct Ollama pass-through (no retrieval)
+  - RAG modes (fast/balanced/complex): embed query → FAISS+BM25 search → compact context → LLM stream
+  - Semantic cache: near-identical queries bypass LLM and return a stored answer
+
+Also exposes GET /props (llama.cpp-compatible server info for the WebUI).
+"""
+import json
+import re
+import time
+import uuid
+from urllib.parse import quote
+
+import ollama
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+
+from SearchEngine.cache import db_ai_mode_lookup, db_set_ai_mode
+from SearchEngine.config import AI_MODE_CFG, AI_MODE_LLM_MODEL, AI_MODE_LLM_OPTIONS, OLLAMA_TIMEOUT, _load_prompt
+from SearchEngine.embedding import embed_ai_mode
+from SearchEngine.metrics import llm_metrics
+from SearchEngine.metrics.llm_client import _extract_timings as _llm_extract_timings
+import SearchEngine.zim_retrieval as zim_retrieval
+from api.backends import select_backend
+from api.models import OLLAMA_SUPPORTED_KEYS, get_active_model
+
+import asyncio
+
+router = APIRouter()
+
+KIWIX_VIEWER_BASE = __import__("os").environ.get("KIWIX_VIEWER_BASE", "http://127.0.0.1/kiwix/viewer").rstrip("/")
+
+_LINE_SPLIT_RE = re.compile(r"\n{2,}")
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _available_zim_names() -> list[str]:
+    return [h.name for h in getattr(zim_retrieval, "_handles", [])]
+
+
+def _latest_user_message(messages: list) -> str:
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            content = m.get("content", "")
+            if isinstance(content, str):
+                return content
+            return " ".join(p.get("text", "") for p in content if isinstance(p, dict))
+    return ""
+
+
+def _sse(chat_id: str, created: int, text: str, finish: bool = False,
+         se_metrics: dict | None = None, model: str = "searchengine",
+         backend: str | None = None) -> str:
+    delta: dict = {"content": text}
+    if finish:
+        delta["model"] = model
+    payload: dict = {
+        "id": chat_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": "stop" if finish else None}],
+    }
+    if se_metrics:
+        payload["se_metrics"] = se_metrics
+    if backend:
+        payload["backend"] = backend
+    return "data: " + json.dumps(payload) + "\n\n"
+
+
+def _sse_thinking(chat_id: str, created: int, text: str) -> str:
+    return "data: " + json.dumps({
+        "id": chat_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": "searchengine",
+        "choices": [{"index": 0, "delta": {"reasoning_content": text}, "finish_reason": None}],
+    }) + "\n\n"
+
+
+def _sse_sources(chat_id: str, created: int, sources: list[dict]) -> str:
+    return "data: " + json.dumps({
+        "id": chat_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": "searchengine",
+        "sources": sources,
+        "choices": [{"index": 0, "delta": {"content": ""}}],
+    }) + "\n\n"
+
+
+def _source_cards(hits: list[dict], context_chunks: list[str]) -> list[dict]:
+    """Build per-chunk provenance cards for the WebUI source panel."""
+    seen: set[tuple[str, str]] = set()
+    sources: list[dict] = []
+    for h, chunk in zip(hits, context_chunks):
+        key = (h.get("title", ""), h.get("section_title", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        zim_name = h.get("zim_name", "")
+        article_path = (h.get("url") or h.get("title", "").replace(" ", "_")).lstrip("/")
+        section = h.get("section_title", "")
+        sources.append({
+            "title":        h.get("title", ""),
+            "section":      section,
+            "url":          f"{KIWIX_VIEWER_BASE}#{quote(zim_name, safe='')}/{quote(article_path, safe='/%')}",
+            "snippet":      (h.get("text") or "")[:240],
+            "context":      chunk,
+            "rerank_score": h.get("rerank_score"),
+            "faiss_score":  h.get("faiss_score"),
+            "zim_name":     zim_name,
+        })
+    return sources
+
+
+def _format_infobox_facts(text: str) -> str:
+    rows: list[tuple[str, str]] = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line.startswith("Fact: "):
+            continue
+        fact = line.removeprefix("Fact: ").strip()
+        if " = " not in fact:
+            continue
+        label, value = fact.split(" = ", 1)
+        rows.append((label.strip(), value.strip()))
+    if not rows:
+        return text.strip()
+    out = ["| Field | Value |", "| --- | --- |"]
+    for label, value in rows:
+        out.append(f"| {label.replace('|', '/')} | {value.replace('|', '/')} |")
+    return "\n".join(out)
+
+
+def _format_hit_context(hit: dict) -> str:
+    """Format one retrieved chunk for LLM consumption, stripping stored prefix and adding infobox table."""
+    title   = hit.get("title",         "").strip()
+    section = hit.get("section_title", "").strip() or "Unknown"
+    raw     = (hit.get("text") or "").strip()
+    clean   = re.sub(
+        r"^Article:.*?\nSection:.*?\nText:\s*", "", raw, count=1, flags=re.DOTALL,
+    ).strip()
+    parts = [f"Article: {title}", f"Section: {section}"]
+    infobox_text = (hit.get("infobox_text") or "").strip()
+    if infobox_text:
+        parts.append(f"Infobox facts:\n{_format_infobox_facts(infobox_text)}")
+    parts.append(f"Text: {clean}")
+    return "\n".join(parts)
+
+
+def _compact_chunk_text(text: str, max_chars: int) -> str:
+    text = (text or "").strip()
+    if len(text) <= max_chars:
+        return text
+    parts = [p.strip() for p in _LINE_SPLIT_RE.split(text) if p.strip()]
+    kept: list[str] = []
+    total = 0
+    for part in parts:
+        add = len(part) + (2 if kept else 0)
+        if kept and total + add > max_chars:
+            break
+        if not kept and len(part) > max_chars:
+            return part[:max_chars].rsplit(" ", 1)[0] + " ..."
+        kept.append(part)
+        total += add
+    compact = "\n\n".join(kept).strip()
+    if len(compact) > max_chars:
+        compact = compact[:max_chars].rsplit(" ", 1)[0] + " ..."
+    return compact
+
+
+def _compact_context(chunks: list[str], mode: str, num_ctx: int) -> tuple[list[str], int]:
+    if not chunks:
+        return [], 0
+    if mode == "fast":
+        total_budget = min(1400, max(700, int(num_ctx * 2.6)))
+        per_chunk = max(320, total_budget // max(1, len(chunks)))
+    elif mode == "balanced":
+        total_budget = min(3200, max(1400, int(num_ctx * 3.0)))
+        per_chunk = max(500, total_budget // max(1, len(chunks)))
+    else:
+        total_budget = min(7000, max(2200, int(num_ctx * 3.4)))
+        per_chunk = max(700, total_budget // max(1, len(chunks)))
+    compacted = [_compact_chunk_text(c, per_chunk) for c in chunks]
+    context = "\n\n".join(compacted)
+    if len(context) <= total_budget:
+        return compacted, len(context)
+    trimmed: list[str] = []
+    used = 0
+    for c in compacted:
+        add = len(c) + (2 if trimmed else 0)
+        if trimmed and used + add > total_budget:
+            break
+        if not trimmed and len(c) > total_budget:
+            one = _compact_chunk_text(c, total_budget)
+            return [one], len(one)
+        trimmed.append(c)
+        used += add
+    return trimmed, used
+
+
+def _preview(text: str, n: int = 220) -> str:
+    text = re.sub(r"\s+", " ", (text or "")).strip()
+    return text if len(text) <= n else text[:n].rsplit(" ", 1)[0] + " ..."
+
+
+def _log_zim_handles() -> None:
+    handles = getattr(zim_retrieval, "_handles", [])
+    if not handles:
+        print("[webui-rag] zims=none", flush=True)
+        return
+    for h in handles:
+        print(f"[webui-rag] zim={h.name!r} vectors={getattr(h.idx, 'ntotal', '?')}", flush=True)
+
+
+def _log_hits(hits: list[dict]) -> None:
+    print(f"[webui-rag] retrieved_chunks={len(hits)}", flush=True)
+    for i, h in enumerate(hits, start=1):
+        sources = ",".join(h.get("candidate_sources") or [])
+        print(
+            f"  [{i:02d}] rerank={h.get('rerank_score', 0):.5f} "
+            f"fusion={h.get('fusion_score', 0):.5f} "
+            f"fusion_rank={h.get('fusion_rank', '?')} "
+            f"faiss={h.get('faiss_score', 0):.3f} "
+            f"para_bm25={h.get('para_bm25_score', 0):.5f} "
+            f"title_bm25={h.get('title_bm25_score', 0):.5f} "
+            f"sources={sources or '-'} "
+            f"zim={h.get('zim_name', '')!r} "
+            f"title={h.get('title', '')!r} "
+            f"section={h.get('section_title', '')!r}",
+            flush=True,
+        )
+        print(f"       preview={_preview(h.get('text', ''))!r}", flush=True)
+        if h.get("infobox_text"):
+            print(f"       infobox_preview={_preview(h.get('infobox_text', ''))!r}", flush=True)
+
+
+def _log_candidate_pools(pools: list[dict]) -> None:
+    print(f"[webui-rag] candidate_pools={len(pools)}", flush=True)
+    for pool in pools:
+        print(
+            f"[webui-rag] candidate_pool zim={pool.get('zim_name', '')!r} "
+            f"faiss={pool.get('faiss_candidates', 0)} "
+            f"paragraph_bm25={pool.get('paragraph_bm25_candidates', 0)} "
+            f"title_bm25_articles={pool.get('title_bm25_articles', 0)} "
+            f"unique={pool.get('unique_candidate_chunks', 0)} "
+            f"post_filter={pool.get('post_filter_chunks', 0)} "
+            f"rerank_pool={pool.get('rerank_pool_chunks', 0)}",
+            flush=True,
+        )
+        for i, h in enumerate(pool.get("chunks", []), start=1):
+            sources = ",".join(h.get("candidate_sources") or [])
+            print(
+                f"  candidate[{i:02d}] rerank={h.get('rerank_score', 0):.5f} "
+                f"fusion={h.get('fusion_score', 0):.5f} "
+                f"fusion_rank={h.get('fusion_rank', '?')} "
+                f"faiss={h.get('faiss_score', 0):.3f} "
+                f"para_bm25={h.get('para_bm25_score', 0):.5f} "
+                f"title_bm25={h.get('title_bm25_score', 0):.5f} "
+                f"sources={sources or '-'} "
+                f"title={h.get('title', '')!r} "
+                f"section={h.get('section_title', '')!r}",
+                flush=True,
+            )
+            print(f"       raw_preview={_preview(h.get('text', ''), 420)!r}", flush=True)
+
+
+async def _wake_ollama(model: str, backend_url: str = "http://localhost:11434") -> None:
+    """Fire-and-forget model warmup; generation still works if this fails."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=30) as c:
+            await c.post(
+                f"{backend_url}/api/generate",
+                json={"model": model, "keep_alive": "25m", "prompt": ""},
+            )
+    except Exception:
+        pass
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@router.get("/props")
+def props():
+    """llama.cpp-compatible server info endpoint used by the WebUI to read the active model."""
+    model = get_active_model()
+    return {
+        "role": "model",
+        "model_path": model,
+        "model_alias": model,
+        "total_slots": 1,
+        "modalities": {"vision": False, "audio": False},
+        "build_info": "aiiab",
+        "bos_token": "",
+        "eos_token": "",
+        "chat_template": "",
+        "default_generation_settings": {},
+    }
+
+
+@router.post("/v1/chat/completions")
+async def chat_completions(request: Request):
+    """Main RAG chat endpoint. Streams SSE tokens; sources injected before first token."""
+    body = await request.json()
+    messages = body.get("messages", [])
+    mode = body.get("mode", "balanced")
+    if mode not in ("fast", "balanced", "complex", "chat"):
+        mode = "balanced"
+    selected_zim = (body.get("zim") or "all").strip()
+    allowed_zims = set(_available_zim_names())
+    if selected_zim != "all" and selected_zim not in allowed_zims:
+        return JSONResponse(
+            {"error": f"ZIM {selected_zim!r} is not enabled by the admin config."},
+            status_code=400,
+        )
+    bypass_cache = bool(body.get("bypass_cache", False))
+    think = body.get("think", None)
+    log_level = str(body.get("log_level", "full")).lower()
+    if log_level not in ("off", "summary", "full"):
+        log_level = "off"
+
+    query = _latest_user_message(messages).strip()
+    if not query:
+        return Response("data: [DONE]\n\n", media_type="text/event-stream")
+
+    _mode_cfg = zim_retrieval._MODE_CFGS.get(mode if mode != "chat" else "balanced", {})
+    _retrieval_cfg = _mode_cfg.get("retrieval", {})
+    _current_active_model = get_active_model()
+    _llm_model = _mode_cfg.get("llm_model", _current_active_model)
+    _llm_options = dict(_mode_cfg.get("llm_options", AI_MODE_LLM_OPTIONS))
+
+    _user_llm_opts = body.get("user_llm_options", {})
+    if _user_llm_opts and isinstance(_user_llm_opts, dict):
+        _caps = _mode_cfg.get("caps", {})
+        for _k, _v in _user_llm_opts.items():
+            if _k not in OLLAMA_SUPPORTED_KEYS:
+                continue
+            if isinstance(_v, (int, float)):
+                _cap = _caps.get(_k)
+                if _cap is not None:
+                    _v = min(_v, _cap)
+                _llm_options[_k] = _v
+
+    _top_k = _retrieval_cfg.get("top_k", AI_MODE_CFG.get("top_chunks", 3))
+    _answer_filter = bool(_retrieval_cfg.get("answer_filter", mode == "balanced"))
+    _prompt_path = _mode_cfg.get("system_prompt")
+    _default_system_prompt = _load_prompt(_prompt_path) if _prompt_path else _load_prompt(
+        AI_MODE_CFG.get("system_prompt", "prompts/ai_mode.md")
+    )
+    _custom_system = next(
+        (m.get("content", "").strip() for m in messages if m.get("role") == "system"), ""
+    )
+    _system_prompt = _custom_system if _custom_system else _default_system_prompt
+    _mode_think = _mode_cfg.get("think", None)
+    if think is None and _mode_think is not None:
+        think = bool(_mode_think)
+
+    _backend = await select_backend()
+    if _backend is None:
+        async def _no_backend():
+            yield _sse("err", int(time.time()), "No inference backend available. Check your Ollama backends in Settings.", finish=True)
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(_no_backend(), media_type="text/event-stream")
+    _backend_name, _backend_url = _backend
+
+    asyncio.create_task(_wake_ollama(_llm_model, _backend_url))
+
+    chat_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    created = int(time.time())
+
+    def _generate():
+        t0 = time.time()
+        summary_logs = log_level in ("summary", "full")
+        full_logs = log_level == "full"
+
+        if summary_logs:
+            print(
+                f"\n[webui-rag] ===== q={query!r} mode={mode} zim={selected_zim!r} "
+                f"cache={'bypass' if bypass_cache else 'on'} log={log_level} =====",
+                flush=True,
+            )
+            print(
+                f"[webui-rag] mode_strategy | top_k={_top_k} "
+                f"answer_filter={_answer_filter} "
+                f"faiss_candidates={_retrieval_cfg.get('faiss_candidates', '?')} "
+                f"bm25_candidates={_retrieval_cfg.get('bm25_candidates', '?')}",
+                flush=True,
+            )
+        if full_logs:
+            _log_zim_handles()
+
+        # ── Direct chat (no retrieval) ────────────────────────────────────────
+        if mode == "chat":
+            t_context = time.time()
+            if summary_logs:
+                print(f"[webui-rag] 1_chat_llm_start | total={t_context - t0:.3f}s | model={_llm_model}", flush=True)
+            full_answer = ""
+            _chat_client = ollama.Client(host=_backend_url, timeout=OLLAMA_TIMEOUT)
+            _chat_kwargs: dict = dict(
+                model=_llm_model,
+                options={k: v for k, v in _llm_options.items() if k != "keep_alive"},
+                keep_alive=_llm_options.get("keep_alive", "15m"),
+                messages=[
+                    {"role": "system", "content": _system_prompt},
+                    {"role": "user", "content": query},
+                ],
+                stream=True,
+            )
+            if think is not None:
+                _chat_kwargs["think"] = bool(think)
+            try:
+                stream = _chat_client.chat(**_chat_kwargs)
+                for chunk in stream:
+                    thinking = chunk["message"].get("thinking") or ""
+                    if thinking:
+                        yield _sse_thinking(chat_id, created, thinking)
+                    token = chunk["message"]["content"]
+                    if token:
+                        full_answer += token
+                        yield _sse(chat_id, created, token)
+            except Exception as e:
+                err_msg = str(e)
+                print(f"[webui-rag] LLM error on {_backend_name}: {err_msg}", flush=True)
+                if "not found" in err_msg.lower() or "no such" in err_msg.lower():
+                    yield _sse(chat_id, created,
+                               f"Model **{_llm_model}** is not available on **{_backend_name}**. "
+                               f"Run `ollama pull {_llm_model}` on that machine.")
+                else:
+                    yield _sse(chat_id, created, f"Inference error on {_backend_name}: {err_msg}")
+                yield _sse(chat_id, created, "", finish=True, model=_llm_model, backend=_backend_name)
+                yield "data: [DONE]\n\n"
+                return
+            t_done = time.time()
+            if summary_logs:
+                print(
+                    f"[webui-rag] 2_chat_done | took={t_done - t_context:.3f}s | "
+                    f"total={t_done - t0:.3f}s | answer_chars={len(full_answer)}",
+                    flush=True,
+                )
+            if full_logs:
+                print("[webui-rag] --- answer ---", flush=True)
+                print(full_answer, flush=True)
+                print("[webui-rag] --- end answer ---", flush=True)
+            yield _sse(chat_id, created, "", finish=True, model=_llm_model, backend=_backend_name)
+            yield "data: [DONE]\n\n"
+            return
+
+        # ── RAG pipeline ──────────────────────────────────────────────────────
+        query_vec = embed_ai_mode(query)
+        t_embed = time.time()
+        if summary_logs:
+            print(f"[webui-rag] 1_embed | took={t_embed - t0:.3f}s | vec={query_vec.shape}", flush=True)
+
+        search_result = zim_retrieval.search(
+            query, _top_k, mode, query_vec=query_vec, debug=full_logs,
+            zim_name=None if selected_zim == "all" else selected_zim,
+        )
+        if full_logs:
+            zim_hits, candidate_pools = search_result
+        else:
+            zim_hits, candidate_pools = search_result, []
+        t_search = time.time()
+        if summary_logs:
+            print(
+                f"[webui-rag] 2_search | took={t_search - t_embed:.3f}s | "
+                f"total={t_search - t0:.3f}s | {len(zim_hits)} chunks ({mode})",
+                flush=True,
+            )
+        if full_logs:
+            _log_candidate_pools(candidate_pools)
+            _log_hits(zim_hits)
+
+        cached = None if bypass_cache else db_ai_mode_lookup(
+            query_vec, mode=mode, zim_name=selected_zim, verbose=summary_logs,
+        )
+        t_cache = time.time()
+        if summary_logs:
+            print(
+                f"[webui-rag] 3_cache_lookup | took={t_cache - t_search:.3f}s | "
+                f"total={t_cache - t0:.3f}s | {'bypassed' if bypass_cache else 'checked'}",
+                flush=True,
+            )
+        if cached:
+            yield _sse(chat_id, created, cached)
+            if full_logs:
+                print(f"[webui-rag] cached_answer:\n{cached}", flush=True)
+            yield _sse(chat_id, created, "", finish=True, model=_llm_model, backend=_backend_name)
+            yield "data: [DONE]\n\n"
+            return
+
+        if not zim_hits:
+            yield _sse(chat_id, created, "No relevant content found.")
+            yield _sse(chat_id, created, "", finish=True, model=_llm_model, backend=_backend_name)
+            yield "data: [DONE]\n\n"
+            return
+
+        raw_chunks = [_format_hit_context(h) for h in zim_hits]
+        num_ctx = int(_llm_options.get("num_ctx", 1024))
+        context_chunks, context_len = _compact_context(raw_chunks, mode, num_ctx)
+        sources = _source_cards(zim_hits, context_chunks)
+        if sources:
+            yield _sse_sources(chat_id, created, sources)
+
+        context = "\n\n".join(context_chunks)
+        raw_context_len = len("\n\n".join(raw_chunks))
+        if summary_logs:
+            print(
+                f"[webui-rag] 4_context | raw={raw_context_len} chars | compacted={context_len} chars | "
+                f"chunks={len(context_chunks)} | sources={len(sources)}",
+                flush=True,
+            )
+        if full_logs:
+            print("[webui-rag] --- context ---", flush=True)
+            print(context, flush=True)
+            print("[webui-rag] --- end context ---", flush=True)
+        t_context = time.time()
+        if summary_logs:
+            print(
+                f"[webui-rag] 5_llm_start | took={t_context - t_cache:.3f}s | "
+                f"total={t_context - t0:.3f}s | model={_llm_model} | mode={mode}",
+                flush=True,
+            )
+
+        full_answer = ""
+        llm_messages = [
+            {"role": "system", "content": _system_prompt},
+            {"role": "user",   "content": f"Context:\n{context}\n\nQuestion: {query}"},
+        ]
+        _rag_client = ollama.Client(host=_backend_url, timeout=OLLAMA_TIMEOUT)
+        _rag_chat_kwargs: dict = dict(
+            model=_llm_model,
+            options={k: v for k, v in _llm_options.items() if k != "keep_alive"},
+            keep_alive=_llm_options.get("keep_alive", "15m"),
+            messages=llm_messages,
+            stream=True,
+        )
+        if think is not None:
+            _rag_chat_kwargs["think"] = bool(think)
+        try:
+            stream = _rag_client.chat(**_rag_chat_kwargs)
+            for chunk in stream:
+                thinking = chunk["message"].get("thinking") or ""
+                if thinking:
+                    yield _sse_thinking(chat_id, created, thinking)
+                token = chunk["message"]["content"]
+                if chunk.get("done", False):
+                    try:
+                        llm_metrics.record("answer", _llm_model, _llm_extract_timings(chunk, _llm_model))
+                    except Exception:
+                        pass
+                if token:
+                    full_answer += token
+                    yield _sse(chat_id, created, token)
+        except Exception as e:
+            err_msg = str(e)
+            print(f"[webui-rag] LLM error on {_backend_name}: {err_msg}", flush=True)
+            if "not found" in err_msg.lower() or "no such" in err_msg.lower():
+                yield _sse(chat_id, created,
+                           f"Model **{_llm_model}** is not available on **{_backend_name}**. "
+                           f"Run `ollama pull {_llm_model}` on that machine.")
+            else:
+                yield _sse(chat_id, created, f"Inference error on {_backend_name}: {err_msg}")
+            yield _sse(chat_id, created, "", finish=True, model=_llm_model, backend=_backend_name)
+            yield "data: [DONE]\n\n"
+            return
+
+        if full_answer:
+            db_set_ai_mode(query, query_vec, full_answer, mode=mode, zim_name=selected_zim)
+        t_done = time.time()
+        if summary_logs:
+            print(
+                f"[webui-rag] 6_done | took={t_done - t_context:.3f}s | "
+                f"total={t_done - t0:.3f}s | answer_chars={len(full_answer)}",
+                flush=True,
+            )
+        if full_logs:
+            print("[webui-rag] --- answer ---", flush=True)
+            print(full_answer, flush=True)
+            print("[webui-rag] --- end answer ---", flush=True)
+
+        records = llm_metrics.get_last(20)
+        se_metrics = next((r for r in reversed(records) if r.get("role") == "answer"), None)
+        yield _sse(chat_id, created, "", finish=True, se_metrics=se_metrics, model=_llm_model, backend=_backend_name)
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )

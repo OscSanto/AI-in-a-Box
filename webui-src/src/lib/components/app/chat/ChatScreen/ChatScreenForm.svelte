@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { afterNavigate } from '$app/navigation';
 	import { ChatFormHelperText, ChatForm } from '$lib/components/app';
+	import { parseRagCommand } from '$lib/stores/ragControls.svelte';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -59,9 +60,20 @@
 		)
 			return;
 
+		const messageToSend = message.trim();
+		const command = parseRagCommand(messageToSend);
+		if (command.handled) {
+			message = command.remaining;
+			chatFormRef?.resetTextareaHeight();
+			if (command.message) window.alert(command.message);
+			if (command.remaining) {
+				return handleSubmit();
+			}
+			return;
+		}
+
 		if (!chatFormRef?.checkModelSelected()) return;
 
-		const messageToSend = message.trim();
 		const filesToSend = [...uploadedFiles];
 
 		message = '';

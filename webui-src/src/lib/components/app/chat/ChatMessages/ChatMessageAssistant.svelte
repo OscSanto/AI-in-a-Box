@@ -302,8 +302,61 @@
 		{:else}
 			<MarkdownContent content={visibleMessageContent || ''} attachments={message.extra} />
 		{/if}
-		{#if message.model === 'searchengine' && message.seMetrics}
-			<SearchEngineMetrics metrics={message.seMetrics} />
+		{#if message.ragSources?.length || message.seMetrics}
+			<details class="mt-4 rounded-2xl border border-border bg-muted/30 p-3 text-sm">
+				<summary class="cursor-pointer select-none font-medium text-muted-foreground">
+					Retrieval details
+					{#if message.ragSources?.length}
+						<span class="ml-1 text-xs">({message.ragSources.length} sources)</span>
+					{/if}
+				</summary>
+
+				<div class="mt-3 space-y-3">
+					{#if message.ragSources?.length}
+						<div class="space-y-2">
+							{#each message.ragSources as source, index}
+								<div class="rounded-xl border border-border/70 bg-background/70 p-3">
+									<div class="flex flex-wrap items-center gap-2">
+										<a
+											href={source.url}
+											class="font-medium text-primary hover:underline"
+											target="_blank"
+											rel="noreferrer"
+										>
+											{index + 1}. {source.title}
+										</a>
+										{#if source.section}
+											<span class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+												{source.section}
+											</span>
+										{/if}
+										{#if source.zim_name}
+											<span class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+												{source.zim_name}
+											</span>
+										{/if}
+									</div>
+									<div class="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
+										{#if source.rerank_score !== undefined}
+											<span>rerank {Number(source.rerank_score).toFixed(3)}</span>
+										{/if}
+										{#if source.faiss_score !== undefined}
+											<span>faiss {Number(source.faiss_score).toFixed(3)}</span>
+										{/if}
+									</div>
+									{#if source.context || source.snippet}
+										<pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-muted/60 p-2 text-xs leading-5 text-muted-foreground">{source.context || source.snippet}</pre>
+									{/if}
+								</div>
+							{/each}
+						</div>
+					{/if}
+
+					{#if message.seMetrics}
+						<SearchEngineMetrics metrics={message.seMetrics} />
+					{/if}
+				</div>
+			</details>
 		{/if}
 	{:else}
 		<div class="text-sm whitespace-pre-wrap">

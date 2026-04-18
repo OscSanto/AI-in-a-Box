@@ -20,8 +20,8 @@ print("✅ Embed model ready", flush=True)
 
 _embed_lock = threading.Lock()
 
-# Short-lived cache: same text within _EMBED_CACHE_TTL seconds → skip re-encode.
-# Eliminates duplicate embeds when /ai-mode and /zim-sources arrive simultaneously.
+# Short-lived cache: same text within _EMBED_CACHE_TTL seconds -> skip re-encode.
+# Avoids duplicate query encodes when concurrent WebUI requests arrive.
 _EMBED_CACHE_TTL = 10.0   # seconds
 _embed_cache: dict[str, tuple[float, np.ndarray]] = {}  # text → (timestamp, vec)
 

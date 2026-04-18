@@ -72,16 +72,22 @@
   const style = document.createElement("style");
   style.textContent = `
     #webgpu-toggle-bar {
-      position: fixed; bottom: 12px; right: 12px; z-index: 9999;
-      background: #1e1e2e; color: #cdd6f4; border-radius: 8px;
-      padding: 6px 12px; font-size: 12px; font-family: system-ui, sans-serif;
-      display: flex; align-items: center; gap: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.4); user-select: none;
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 8px; border-radius: 6px; font-size: 12px;
+      font-family: system-ui, sans-serif; user-select: none;
+      color: var(--muted-foreground, #a6adc8);
     }
-    #webgpu-toggle-bar label { cursor: pointer; display: flex; align-items: center; gap: 6px; }
+    #webgpu-toggle-bar label { cursor: pointer; display: flex; align-items: center; gap: 6px; flex: 1; }
     #webgpu-toggle-bar input[type=checkbox] { cursor: pointer; width: 14px; height: 14px; }
-    #webgpu-status { font-size: 10px; color: #a6adc8; }
-    #webgpu-toggle-bar.gpu-active { background: #1a3a2a; color: #a6e3a1; }
+    #webgpu-toggle-bar:hover { background: var(--accent, #313244); color: var(--foreground, #cdd6f4); }
+    #webgpu-toggle-bar.gpu-active { color: #a6e3a1; }
+    #webgpu-status { font-size: 10px; opacity: 0.7; }
+    #clear-cache-btn {
+      background: transparent; border: 1px solid var(--border, #45475a);
+      color: inherit; border-radius: 4px;
+      padding: 2px 6px; font-size: 10px; cursor: pointer;
+    }
+    #clear-cache-btn:hover { background: var(--accent, #313244); }
     #webgpu-progress {
       position: fixed; bottom: 44px; right: 12px; z-index: 9998;
       background: #1e1e2e; color: #cdd6f4; border-radius: 6px;
@@ -100,12 +106,24 @@
       ⚡ Device GPU
     </label>
     <span id="webgpu-status">checking…</span>
-    <button id="clear-cache-btn" title="Clear all saved AI answers" style="
-      background: #313244; border: none; color: #cdd6f4; border-radius: 5px;
-      padding: 3px 8px; font-size: 11px; cursor: pointer; margin-left: 6px;
-    ">Clear Cache</button>
+    <button id="clear-cache-btn" title="Clear all saved AI answers">Clear Cache</button>
   `;
-  document.body.appendChild(bar);
+
+  // Inject into sidebar slot if available, else fall back to fixed bottom-right
+  function _mountBar() {
+    const slot = document.getElementById("webgpu-slot");
+    if (slot) {
+      slot.appendChild(bar);
+    } else {
+      // Slot not rendered yet — wait for it (SvelteKit hydrates asynchronously)
+      const observer = new MutationObserver(() => {
+        const s = document.getElementById("webgpu-slot");
+        if (s) { observer.disconnect(); s.appendChild(bar); }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    }
+  }
+  _mountBar();
 
   // ── Clear cache button ────────────────────────────────────────────────────
   document.getElementById("clear-cache-btn").addEventListener("click", async () => {

@@ -105,23 +105,31 @@ def _extract_infobox(soup) -> dict | None:
         return None
 
     header = ""
+    current_group = ""
     rows   = []
 
     for tr in infobox.find_all("tr"):
         th = tr.find("th")
         td = tr.find("td")
 
-        # Header row — th with no td sibling, or infobox-title class
+        # Header/group row — Wikipedia infoboxes use th-only rows both for
+        # the main title and for grouped subheaders such as "Area".
         if th and not td:
             text = _clean_text(th.get_text(" "))
             if text and len(text) < 100:
-                header = text
+                classes = set(th.get("class") or [])
+                if not header or classes & {"infobox-above", "infobox-title"}:
+                    header = text
+                else:
+                    current_group = text
             continue
 
         # Data row — th label + td value
         if th and td:
             label = _clean_text(th.get_text(" "))
             value = _clean_text(td.get_text(" "))
+            if label.startswith("•") and current_group:
+                label = f"{current_group} {label}"
             # Skip empty, overly long values (images, nested tables), or pure numbers with no label
             if label and value and len(label) < 80 and 2 < len(value) < 250:
                 rows.append({"label": label, "value": value})

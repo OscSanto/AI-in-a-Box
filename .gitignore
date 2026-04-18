@@ -1,10 +1,18 @@
 #  Large assets (downloaded via scripts/download_webllm.sh)
 webui/models/
 webui/webllm/
+webui/_app/_app/immutable/
 
 #  Runtime data
+runtime/
 data/
 runs/
+src/backends.json
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.jsonl
 
 #  Python
 __pycache__/
@@ -40,6 +48,8 @@ Thumbs.db
 .env.*
 !.env.example
 !.env.test
+
+
 
 # Scratch code
 scratch.py

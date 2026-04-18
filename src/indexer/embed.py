@@ -1,12 +1,12 @@
 """
-Embedding via fastembed — Snowflake/snowflake-arctic-embed-xs (384-dim).
-L2-normalized output for cosine similarity with IndexFlatIP.
+Embedding via fastembed — sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+(384-dim, 50+ languages). L2-normalized output for cosine similarity with IndexFlatIP.
 """
 import threading
 import numpy as np
 from fastembed import TextEmbedding
 
-_MODEL_NAME = "Snowflake/snowflake-arctic-embed-xs"
+_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 _lock = threading.Lock()
 _model: TextEmbedding | None = None
 

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ChevronDown, Loader2, Package, Power } from '@lucide/svelte';
+	import { ChevronDown, Loader2, Package, Power, Store } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
@@ -14,12 +14,8 @@
 		singleModelName
 	} from '$lib/stores/models.svelte';
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
-	import { isRouterMode } from '$lib/stores/server.svelte';
-	import {
-		DialogModelInformation,
-		DropdownMenuSearchable,
-		TruncatedText
-	} from '$lib/components/app';
+	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
+	import { DropdownMenuSearchable, TruncatedText } from '$lib/components/app';
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
@@ -101,7 +97,7 @@
 	});
 
 	let isOpen = $state(false);
-	let showModelDialog = $state(false);
+	let showModelStore = $state(false);
 
 	onMount(() => {
 		modelsStore.fetch().catch((error) => {
@@ -109,28 +105,54 @@
 		});
 	});
 
-	// Handle changes to the model selector dropdown or the model dialog, depending on if the server is in
-	// router mode or not.
+	// Handle changes to the model selector dropdown.
+	// Both MODEL and ROUTER modes now use a dropdown.
 	function handleOpenChange(open: boolean) {
 		if (loading || updating) return;
 
-		if (isRouter) {
-			if (open) {
-				isOpen = true;
-				searchTerm = '';
-				highlightedIndex = -1;
+		if (open) {
+			isOpen = true;
+			searchTerm = '';
+			highlightedIndex = -1;
 
+			if (isRouter) {
 				modelsStore.fetchRouterModels().then(() => {
 					modelsStore.fetchModalitiesForLoadedModels();
 				});
 			} else {
-				isOpen = false;
-				searchTerm = '';
-				highlightedIndex = -1;
+				modelsStore.fetch(true).catch(() => {});
 			}
 		} else {
-			showModelDialog = open;
+			isOpen = false;
+			searchTerm = '';
+			highlightedIndex = -1;
 		}
+	}
+
+	// Switch active model in non-router (MODEL) mode via /api/set-model
+	async function handleSelectNonRouter(modelId: string) {
+		const option = options.find((o) => o.id === modelId);
+		if (!option) return;
+
+		try {
+			await fetch('/api/set-model', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ model: option.model })
+			});
+			await serverStore.fetch();
+		} catch (e) {
+			console.error('Failed to set model:', e);
+		}
+
+		handleOpenChange(false);
+
+		requestAnimationFrame(() => {
+			const textarea = document.querySelector<HTMLTextAreaElement>(
+				'[data-slot="chat-form"] textarea'
+			);
+			textarea?.focus();
+		});
 	}
 
 	export function open() {
@@ -267,50 +289,51 @@
 	{:else}
 		{@const selectedOption = getDisplayOption()}
 
-		{#if isRouter}
-			<DropdownMenu.Root bind:open={isOpen} onOpenChange={handleOpenChange}>
-				<DropdownMenu.Trigger
-					disabled={disabled || updating}
-					onclick={(e) => {
-						e.preventDefault();
-						e.stopPropagation();
-					}}
-				>
-					<button
-						type="button"
-						class={cn(
-							`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
-							!isCurrentModelInCache()
-								? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
-								: forceForegroundText
+		<DropdownMenu.Root bind:open={isOpen} onOpenChange={handleOpenChange}>
+			<DropdownMenu.Trigger
+				disabled={disabled || updating}
+				onclick={(e) => {
+					e.preventDefault();
+					e.stopPropagation();
+				}}
+			>
+				<button
+					type="button"
+					class={cn(
+						`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
+						!isCurrentModelInCache()
+							? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+							: forceForegroundText
+								? 'text-foreground'
+								: isHighlightedCurrentModelActive
 									? 'text-foreground'
-									: isHighlightedCurrentModelActive
-										? 'text-foreground'
-										: 'text-muted-foreground',
-							isOpen ? 'text-foreground' : ''
-						)}
-						style="max-width: min(calc(100cqw - 9rem), 20rem)"
-						disabled={disabled || updating}
-					>
-						<Package class="h-3.5 w-3.5" />
-
-						<TruncatedText
-							text={selectedOption?.model || 'Select model'}
-							class="min-w-0 font-medium"
-						/>
-
-						{#if updating}
-							<Loader2 class="h-3 w-3.5 animate-spin" />
-						{:else}
-							<ChevronDown class="h-3 w-3.5" />
-						{/if}
-					</button>
-				</DropdownMenu.Trigger>
-
-				<DropdownMenu.Content
-					align="end"
-					class="w-full max-w-[100vw] pt-0 sm:w-max sm:max-w-[calc(100vw-2rem)]"
+									: 'text-muted-foreground',
+						isOpen ? 'text-foreground' : ''
+					)}
+					style="max-width: min(calc(100cqw - 9rem), 20rem)"
+					disabled={disabled || updating}
 				>
+					<Package class="h-3.5 w-3.5" />
+
+					<TruncatedText
+						text={selectedOption?.model || 'Select model'}
+						class="min-w-0 font-medium"
+					/>
+
+					{#if updating}
+						<Loader2 class="h-3 w-3.5 animate-spin" />
+					{:else}
+						<ChevronDown class="h-3 w-3.5" />
+					{/if}
+				</button>
+			</DropdownMenu.Trigger>
+
+			<DropdownMenu.Content
+				align="start"
+				class="w-full max-w-[100vw] pt-0 sm:w-max sm:max-w-[calc(100vw-2rem)]"
+			>
+				{#if isRouter}
+					<!-- Router mode: searchable model list with load/unload controls -->
 					<DropdownMenuSearchable
 						bind:searchValue={searchTerm}
 						placeholder="Search models..."
@@ -320,7 +343,6 @@
 					>
 						<div class="models-list">
 							{#if !isCurrentModelInCache() && currentModel}
-								<!-- Show unavailable model as first option (disabled) -->
 								<button
 									type="button"
 									class="flex w-full cursor-not-allowed items-center bg-red-400/10 p-2 text-left text-sm text-red-400"
@@ -416,37 +438,61 @@
 							{/each}
 						</div>
 					</DropdownMenuSearchable>
-				</DropdownMenu.Content>
-			</DropdownMenu.Root>
-		{:else}
-			<button
-				class={cn(
-					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
-					!isCurrentModelInCache()
-						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
-						: forceForegroundText
-							? 'text-foreground'
-							: isHighlightedCurrentModelActive
-								? 'text-foreground'
-								: 'text-muted-foreground',
-					isOpen ? 'text-foreground' : ''
-				)}
-				style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
-				onclick={() => handleOpenChange(true)}
-				disabled={disabled || updating}
-			>
-				<Package class="h-3.5 w-3.5" />
-
-				<TruncatedText text={selectedOption?.model || ''} class="min-w-0 font-medium" />
-
-				{#if updating}
-					<Loader2 class="h-3 w-3.5 animate-spin" />
+				{:else}
+					<!-- Non-router (MODEL) mode: list all installed Ollama models -->
+					<div class="min-w-[14rem] py-1">
+						{#if loading}
+							<div class="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+								<Loader2 class="h-3.5 w-3.5 animate-spin" />
+								Loading models…
+							</div>
+						{:else if options.length === 0}
+							<p class="px-3 py-2 text-xs text-muted-foreground">No models installed.</p>
+						{:else}
+							{#each options as option (option.id)}
+								{@const isActive = serverModel === option.model}
+								<button
+									type="button"
+									class={cn(
+										'flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition',
+										'cursor-pointer hover:bg-accent hover:text-accent-foreground focus:outline-none',
+										isActive ? 'bg-accent/60 font-medium text-foreground' : 'text-muted-foreground'
+									)}
+									onclick={() => handleSelectNonRouter(option.id)}
+								>
+									{#if isActive}
+										<span class="h-1.5 w-1.5 rounded-full bg-green-500 shrink-0"></span>
+									{:else}
+										<span class="h-1.5 w-1.5 rounded-full bg-muted-foreground/30 shrink-0"></span>
+									{/if}
+									<span class="min-w-0 flex-1 truncate">{option.model}</span>
+								</button>
+							{/each}
+						{/if}
+					</div>
 				{/if}
-			</button>
-		{/if}
+
+				<!-- Browse Store footer (both modes) -->
+				<div class="border-t border-border px-2 py-1.5">
+					<button
+						type="button"
+						class="flex w-full items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+						onclick={() => {
+							handleOpenChange(false);
+							showModelStore = true;
+						}}
+					>
+						<Store class="h-3.5 w-3.5" />
+						Browse Store
+					</button>
+				</div>
+			</DropdownMenu.Content>
+		</DropdownMenu.Root>
 	{/if}
 </div>
 
-{#if showModelDialog && !isRouter}
-	<DialogModelInformation bind:open={showModelDialog} />
+{#if showModelStore}
+	{#await import('$lib/components/app/dialogs/DialogModelStore.svelte') then { default: DialogModelStore }}
+		<DialogModelStore bind:open={showModelStore} />
+	{/await}
 {/if}

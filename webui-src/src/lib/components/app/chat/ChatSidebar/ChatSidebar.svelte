@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { Trash2 } from '@lucide/svelte';
+	import { Trash2, Activity } from '@lucide/svelte';
 	import { ChatSidebarConversationItem, DialogConfirmation } from '$lib/components/app';
 	import ScrollArea from '$lib/components/ui/scroll-area/scroll-area.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar';
@@ -109,8 +109,8 @@
 	}
 </script>
 
-<ScrollArea class="h-[100vh]">
-	<Sidebar.Header class=" top-0 z-10 gap-6 bg-sidebar/50 px-4 py-4 pb-2 backdrop-blur-lg md:sticky">
+<div class="flex h-[100vh] flex-col">
+	<Sidebar.Header class="top-0 z-10 gap-6 bg-sidebar/50 px-4 py-4 pb-2 backdrop-blur-lg md:sticky">
 		<a href="#/" onclick={handleMobileSidebarItemClick}>
 			<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">AI-in-a-Box</h1>
 		</a>
@@ -118,49 +118,63 @@
 		<ChatSidebarActions {handleMobileSidebarItemClick} bind:isSearchModeActive bind:searchQuery />
 	</Sidebar.Header>
 
-	<Sidebar.Group class="mt-4 space-y-2 p-0 px-4">
-		{#if (filteredConversations.length > 0 && isSearchModeActive) || !isSearchModeActive}
-			<Sidebar.GroupLabel>
-				{isSearchModeActive ? 'Search results' : 'Conversations'}
-			</Sidebar.GroupLabel>
-		{/if}
+	<ScrollArea class="min-h-0 flex-1">
+		<Sidebar.Group class="mt-4 space-y-2 p-0 px-4">
+			{#if (filteredConversations.length > 0 && isSearchModeActive) || !isSearchModeActive}
+				<Sidebar.GroupLabel>
+					{isSearchModeActive ? 'Search results' : 'Conversations'}
+				</Sidebar.GroupLabel>
+			{/if}
 
-		<Sidebar.GroupContent>
-			<Sidebar.Menu>
-				{#each filteredConversations as conversation (conversation.id)}
-					<Sidebar.MenuItem class="mb-1">
-						<ChatSidebarConversationItem
-							conversation={{
-								id: conversation.id,
-								name: conversation.name,
-								lastModified: conversation.lastModified,
-								currNode: conversation.currNode
-							}}
-							{handleMobileSidebarItemClick}
-							isActive={currentChatId === conversation.id}
-							onSelect={selectConversation}
-							onEdit={handleEditConversation}
-							onDelete={handleDeleteConversation}
-							onStop={handleStopGeneration}
-						/>
-					</Sidebar.MenuItem>
-				{/each}
+			<Sidebar.GroupContent>
+				<Sidebar.Menu>
+					{#each filteredConversations as conversation (conversation.id)}
+						<Sidebar.MenuItem class="mb-1">
+							<ChatSidebarConversationItem
+								conversation={{
+									id: conversation.id,
+									name: conversation.name,
+									lastModified: conversation.lastModified,
+									currNode: conversation.currNode
+								}}
+								{handleMobileSidebarItemClick}
+								isActive={currentChatId === conversation.id}
+								onSelect={selectConversation}
+								onEdit={handleEditConversation}
+								onDelete={handleDeleteConversation}
+								onStop={handleStopGeneration}
+							/>
+						</Sidebar.MenuItem>
+					{/each}
 
-				{#if filteredConversations.length === 0}
-					<div class="px-2 py-4 text-center">
-						<p class="mb-4 p-4 text-sm text-muted-foreground">
-							{searchQuery.length > 0
-								? 'No results found'
-								: isSearchModeActive
-									? 'Start typing to see results'
-									: 'No conversations yet'}
-						</p>
-					</div>
-				{/if}
-			</Sidebar.Menu>
-		</Sidebar.GroupContent>
-	</Sidebar.Group>
-</ScrollArea>
+					{#if filteredConversations.length === 0}
+						<div class="px-2 py-4 text-center">
+							<p class="mb-4 p-4 text-sm text-muted-foreground">
+								{searchQuery.length > 0
+									? 'No results found'
+									: isSearchModeActive
+										? 'Start typing to see results'
+										: 'No conversations yet'}
+							</p>
+						</div>
+					{/if}
+				</Sidebar.Menu>
+			</Sidebar.GroupContent>
+		</Sidebar.Group>
+	</ScrollArea>
+
+	<Sidebar.Footer class="border-t border-border/40 px-4 py-3 space-y-1">
+		<div id="webgpu-slot"></div>
+		<a
+			href="#/metrics"
+			onclick={handleMobileSidebarItemClick}
+			class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+		>
+			<Activity class="h-4 w-4" />
+			System Metrics
+		</a>
+	</Sidebar.Footer>
+</div>
 
 <DialogConfirmation
 	bind:open={showDeleteDialog}

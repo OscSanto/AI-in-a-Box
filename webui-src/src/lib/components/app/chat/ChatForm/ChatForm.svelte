@@ -10,7 +10,18 @@
 	import { CLIPBOARD_CONTENT_QUOTE_PREFIX } from '$lib/constants/chat-form';
 	import { KeyboardKey, MimeTypeText } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
-	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
+	import {
+		ragControls,
+		resetBypassCache,
+		resetLogLevel,
+		resetRagMode,
+		resetSelectedZim,
+		resetThinking,
+		toggleThinking,
+		modelSupportsThinking,
+		suggestRagCommand
+	} from '$lib/stores/ragControls.svelte';
+	import { modelOptions, selectedModelId, selectedModelName, singleModelName } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { activeMessages } from '$lib/stores/conversations.svelte';
@@ -90,6 +101,8 @@
 
 	// Configuration
 	let currentConfig = $derived(config());
+	let currentRagControls = $derived(ragControls());
+	let commandSuggestion = $derived(suggestRagCommand(value));
 	let pasteLongTextToFileLength = $derived.by(() => {
 		const n = Number(currentConfig.pasteLongTextToFileLen);
 		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
@@ -120,6 +133,10 @@
 
 		return null;
 	});
+
+	// Thinking mode support — use selectedModelName (reactive) over singleModelName (stale props)
+	let activeModelName = $derived(isRouter ? activeModelId : (selectedModelName() ?? singleModelName()));
+	let supportsThinking = $derived(modelSupportsThinking(activeModelName));
 
 	// Form Validation State
 	let hasModelSelected = $derived(!isRouter || !!conversationModel || !!selectedModelId());
@@ -344,6 +361,62 @@
 			class="flex-column relative min-h-[48px] items-center rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:!py-3"
 			onpaste={handlePaste}
 		>
+			<div class="flex flex-wrap gap-1.5 px-5 pb-2 text-xs">
+				{#if currentRagControls.mode !== 'balanced'}
+					<button
+						type="button"
+						class="rounded-full border border-border bg-muted/70 px-2 py-0.5 text-muted-foreground transition hover:text-foreground"
+						onclick={resetRagMode}
+					>
+						Mode: {currentRagControls.mode} x
+					</button>
+				{/if}
+				{#if currentRagControls.selectedZim !== 'all'}
+					<button
+						type="button"
+						class="rounded-full border border-border bg-muted/70 px-2 py-0.5 text-muted-foreground transition hover:text-foreground"
+						onclick={resetSelectedZim}
+					>
+						ZIM: {currentRagControls.selectedZim} x
+					</button>
+				{/if}
+				{#if currentRagControls.bypassCache}
+					<button
+						type="button"
+						class="rounded-full border border-border bg-muted/70 px-2 py-0.5 text-muted-foreground transition hover:text-foreground"
+						onclick={resetBypassCache}
+					>
+						New answers x
+					</button>
+				{/if}
+				{#if currentRagControls.logLevel !== 'off'}
+					<button
+						type="button"
+						class="rounded-full border border-border bg-muted/70 px-2 py-0.5 text-muted-foreground transition hover:text-foreground"
+						onclick={resetLogLevel}
+					>
+						Logs: {currentRagControls.logLevel} x
+					</button>
+				{/if}
+				{#if supportsThinking}
+					<button
+						type="button"
+						class="rounded-full border px-2 py-0.5 text-xs transition {currentRagControls.thinking
+							? 'border-violet-400 bg-violet-500/10 text-violet-500 hover:bg-violet-500/20'
+							: 'border-border bg-muted/70 text-muted-foreground hover:text-foreground'}"
+						onclick={toggleThinking}
+						title={currentRagControls.thinking ? 'Thinking on — click to disable' : 'Thinking off — click to enable'}
+					>
+						{currentRagControls.thinking ? '🧠 Think ✕' : '🧠 Think'}
+					</button>
+				{/if}
+				{#if commandSuggestion}
+					<span class="rounded-full border border-dashed border-border px-2 py-0.5 text-muted-foreground">
+						Tab: {commandSuggestion}
+					</span>
+				{/if}
+			</div>
+
 			<ChatFormTextarea
 				class="px-5 py-1.5 md:pt-0"
 				bind:this={textareaRef}

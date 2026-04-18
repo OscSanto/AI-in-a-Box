@@ -7,13 +7,18 @@
 		Monitor,
 		ChevronLeft,
 		ChevronRight,
-		Database
+		Database,
+		Server,
+		RotateCcw,
+		BookOpen
 	} from '@lucide/svelte';
 	import {
 		ChatSettingsFooter,
 		ChatSettingsImportExportTab,
 		ChatSettingsFields
 	} from '$lib/components/app';
+	import InferenceBackendSettings from './InferenceBackendSettings.svelte';
+	import LibrariesTab from './LibrariesTab.svelte';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import {
@@ -27,6 +32,9 @@
 	import { NUMERIC_FIELDS, POSITIVE_INTEGER_FIELDS } from '$lib/constants/settings-fields';
 	import { SETTINGS_COLOR_MODES_CONFIG } from '$lib/constants/settings-config';
 	import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
+	import { ragControls } from '$lib/stores/ragControls.svelte';
+	import { samplingConfigStore } from '$lib/stores/samplingConfig.svelte';
+	import { samplingOverridesStore } from '$lib/stores/samplingOverrides.svelte';
 
 	interface Props {
 		onSave?: () => void;
@@ -34,6 +42,45 @@
 	}
 
 	let { onSave, initialSection }: Props = $props();
+
+	// Keys controlled by the sampling overrides system (Ollama-supported, per-mode)
+	const SAMPLING_OVERRIDE_KEYS = ['temperature', 'top_k', 'top_p', 'min_p', 'max_tokens'] as const;
+	const PENALTY_OVERRIDE_KEYS = [
+		'repeat_last_n', 'repeat_penalty', 'presence_penalty', 'frequency_penalty',
+		'dry_multiplier', 'dry_base', 'dry_allowed_length', 'dry_penalty_last_n'
+	] as const;
+	const ALL_OVERRIDE_KEYS = [...SAMPLING_OVERRIDE_KEYS, ...PENALTY_OVERRIDE_KEYS];
+	// UI key → Ollama/YAML key mapping
+	const toYamlKey = (uiKey: string) => uiKey === 'max_tokens' ? 'num_predict' : uiKey;
+
+	function currentMode() {
+		const m = ragControls().mode;
+		return m === 'chat' ? 'balanced' : m;
+	}
+
+	// Build hint maps for fields (keyed by UI key)
+	function buildAdminHints(): Record<string, number | undefined> {
+		const d = samplingConfigStore.getAdminDefaults(currentMode());
+		const hints: Record<string, number | undefined> = {};
+		for (const k of ALL_OVERRIDE_KEYS) hints[k] = d[toYamlKey(k)];
+		return hints;
+	}
+	function buildOllamaHints(): Record<string, number | undefined> {
+		const d = samplingConfigStore.ollamaDefaults;
+		const hints: Record<string, number | undefined> = {};
+		for (const k of ALL_OVERRIDE_KEYS) hints[k] = d[toYamlKey(k)];
+		return hints;
+	}
+	function buildCapHints(): Record<string, number | undefined> {
+		const c = samplingConfigStore.getCaps(currentMode());
+		const hints: Record<string, number | undefined> = {};
+		for (const k of ALL_OVERRIDE_KEYS) hints[k] = c[toYamlKey(k)];
+		return hints;
+	}
+
+	let adminHints = $derived(buildAdminHints());
+	let ollamaHints = $derived(buildOllamaHints());
+	let capHints = $derived(buildCapHints());
 
 	const settingSections: Array<{
 		fields: SettingsFieldConfig[];
@@ -140,113 +187,43 @@
 			title: SETTINGS_SECTION_TITLES.SAMPLING,
 			icon: Funnel,
 			fields: [
-				{
-					key: SETTINGS_KEYS.TEMPERATURE,
-					label: 'Temperature',
-					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.DYNATEMP_RANGE,
-					label: 'Dynamic temperature range',
-					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.DYNATEMP_EXPONENT,
-					label: 'Dynamic temperature exponent',
-					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.TOP_K,
-					label: 'Top K',
-					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.TOP_P,
-					label: 'Top P',
-					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.MIN_P,
-					label: 'Min P',
-					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.XTC_PROBABILITY,
-					label: 'XTC probability',
-					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.XTC_THRESHOLD,
-					label: 'XTC threshold',
-					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.TYP_P,
-					label: 'Typical P',
-					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.MAX_TOKENS,
-					label: 'Max tokens',
-					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.SAMPLERS,
-					label: 'Samplers',
-					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.BACKEND_SAMPLING,
-					label: 'Backend sampling',
-					type: SettingsFieldType.CHECKBOX
-				}
+				{ key: SETTINGS_KEYS.TEMPERATURE, label: 'Temperature', type: SettingsFieldType.INPUT },
+				{ key: SETTINGS_KEYS.DYNATEMP_RANGE, label: 'Dynamic temperature range', type: SettingsFieldType.INPUT, ollamaUnsupported: true },
+				{ key: SETTINGS_KEYS.DYNATEMP_EXPONENT, label: 'Dynamic temperature exponent', type: SettingsFieldType.INPUT, ollamaUnsupported: true },
+				{ key: SETTINGS_KEYS.TOP_K, label: 'Top K', type: SettingsFieldType.INPUT },
+				{ key: SETTINGS_KEYS.TOP_P, label: 'Top P', type: SettingsFieldType.INPUT },
+				{ key: SETTINGS_KEYS.MIN_P, label: 'Min P', type: SettingsFieldType.INPUT },
+				{ key: SETTINGS_KEYS.XTC_PROBABILITY, label: 'XTC probability', type: SettingsFieldType.INPUT, ollamaUnsupported: true },
+				{ key: SETTINGS_KEYS.XTC_THRESHOLD, label: 'XTC threshold', type: SettingsFieldType.INPUT, ollamaUnsupported: true },
+				{ key: SETTINGS_KEYS.TYP_P, label: 'Typical P', type: SettingsFieldType.INPUT, ollamaUnsupported: true },
+				{ key: SETTINGS_KEYS.MAX_TOKENS, label: 'Max tokens', type: SettingsFieldType.INPUT },
+				{ key: SETTINGS_KEYS.SAMPLERS, label: 'Samplers', type: SettingsFieldType.INPUT, ollamaUnsupported: true },
+				{ key: SETTINGS_KEYS.BACKEND_SAMPLING, label: 'Backend sampling', type: SettingsFieldType.CHECKBOX, ollamaUnsupported: true }
 			]
 		},
 		{
 			title: SETTINGS_SECTION_TITLES.PENALTIES,
 			icon: AlertTriangle,
 			fields: [
-				{
-					key: SETTINGS_KEYS.REPEAT_LAST_N,
-					label: 'Repeat last N',
-					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.REPEAT_PENALTY,
-					label: 'Repeat penalty',
-					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.PRESENCE_PENALTY,
-					label: 'Presence penalty',
-					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.FREQUENCY_PENALTY,
-					label: 'Frequency penalty',
-					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.DRY_MULTIPLIER,
-					label: 'DRY multiplier',
-					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.DRY_BASE,
-					label: 'DRY base',
-					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.DRY_ALLOWED_LENGTH,
-					label: 'DRY allowed length',
-					type: SettingsFieldType.INPUT
-				},
-				{
-					key: SETTINGS_KEYS.DRY_PENALTY_LAST_N,
-					label: 'DRY penalty last N',
-					type: SettingsFieldType.INPUT
-				}
+				{ key: SETTINGS_KEYS.REPEAT_LAST_N, label: 'Repeat last N', type: SettingsFieldType.INPUT },
+				{ key: SETTINGS_KEYS.REPEAT_PENALTY, label: 'Repeat penalty', type: SettingsFieldType.INPUT },
+				{ key: SETTINGS_KEYS.PRESENCE_PENALTY, label: 'Presence penalty', type: SettingsFieldType.INPUT },
+				{ key: SETTINGS_KEYS.FREQUENCY_PENALTY, label: 'Frequency penalty', type: SettingsFieldType.INPUT },
+				{ key: SETTINGS_KEYS.DRY_MULTIPLIER, label: 'DRY multiplier', type: SettingsFieldType.INPUT },
+				{ key: SETTINGS_KEYS.DRY_BASE, label: 'DRY base', type: SettingsFieldType.INPUT },
+				{ key: SETTINGS_KEYS.DRY_ALLOWED_LENGTH, label: 'DRY allowed length', type: SettingsFieldType.INPUT },
+				{ key: SETTINGS_KEYS.DRY_PENALTY_LAST_N, label: 'DRY penalty last N', type: SettingsFieldType.INPUT }
 			]
+		},
+		{
+			title: SETTINGS_SECTION_TITLES.BACKENDS,
+			icon: Server,
+			fields: []
+		},
+		{
+			title: SETTINGS_SECTION_TITLES.LIBRARIES,
+			icon: BookOpen,
+			fields: []
 		},
 		{
 			title: SETTINGS_SECTION_TITLES.IMPORT_EXPORT,
@@ -289,13 +266,32 @@
 		// }
 	];
 
-	let activeSection = $derived<SettingsSectionTitle>(
+	let activeSection = $state<SettingsSectionTitle>(
 		initialSection ?? SETTINGS_SECTION_TITLES.GENERAL
 	);
 	let currentSection = $derived(
 		settingSections.find((section) => section.title === activeSection) || settingSections[0]
 	);
 	let localConfig: SettingsConfigType = $state({ ...config() });
+
+	// Load sampling config from backend once
+	$effect(() => { samplingConfigStore.load(); });
+
+	// Sync override values into localConfig whenever we enter Sampling or Penalties section
+	$effect(() => {
+		const title = currentSection.title;
+		if (title !== SETTINGS_SECTION_TITLES.SAMPLING && title !== SETTINGS_SECTION_TITLES.PENALTIES) return;
+		const mode = currentMode();
+		const adminD = samplingConfigStore.getAdminDefaults(mode);
+		const ollamaD = samplingConfigStore.ollamaDefaults;
+		const keys = title === SETTINGS_SECTION_TITLES.SAMPLING ? SAMPLING_OVERRIDE_KEYS : PENALTY_OVERRIDE_KEYS;
+		for (const k of keys) {
+			const yamlKey = toYamlKey(k);
+			const override = samplingOverridesStore.get(mode, yamlKey);
+			const effective = override ?? adminD[yamlKey] ?? ollamaD[yamlKey];
+			if (effective !== undefined) localConfig[k] = effective;
+		}
+	});
 
 	let canScrollLeft = $state(false);
 	let canScrollRight = $state(false);
@@ -319,9 +315,24 @@
 
 	function handleReset() {
 		localConfig = { ...config() };
-
 		setMode(localConfig.theme as ColorMode);
 	}
+
+	function _applyAdminDefaults(keys: readonly string[]) {
+		const mode = currentMode();
+		const adminD = samplingConfigStore.getAdminDefaults(mode);
+		const ollamaD = samplingConfigStore.ollamaDefaults;
+		samplingOverridesStore.resetKeys(mode, keys.map(toYamlKey));
+		for (const k of keys) {
+			const yamlKey = toYamlKey(k);
+			const val = adminD[yamlKey] ?? ollamaD[yamlKey];
+			if (val !== undefined) localConfig[k] = val;
+		}
+	}
+
+	function handleResetSampling() { _applyAdminDefaults(SAMPLING_OVERRIDE_KEYS); }
+	function handleResetPenalties() { _applyAdminDefaults(PENALTY_OVERRIDE_KEYS); }
+	function handleResetAllOverrides() { _applyAdminDefaults(ALL_OVERRIDE_KEYS); }
 
 	function handleSave() {
 		if (localConfig.custom && typeof localConfig.custom === 'string' && localConfig.custom.trim()) {
@@ -354,6 +365,24 @@
 		}
 
 		settingsStore.updateMultipleConfig(processedConfig);
+
+		// Persist sampling/penalty overrides (store only keys that differ from admin default)
+		const mode = currentMode();
+		const adminD = samplingConfigStore.getAdminDefaults(mode);
+		for (const k of ALL_OVERRIDE_KEYS) {
+			const yamlKey = toYamlKey(k);
+			const raw = processedConfig[k];
+			if (raw === undefined || raw === '') { samplingOverridesStore.delete(mode, yamlKey); continue; }
+			const num = Number(raw);
+			if (isNaN(num)) continue;
+			const adminVal = adminD[yamlKey];
+			if (adminVal !== undefined && num === adminVal) {
+				samplingOverridesStore.delete(mode, yamlKey);
+			} else {
+				samplingOverridesStore.set(mode, yamlKey, num);
+			}
+		}
+
 		onSave?.();
 	}
 
@@ -486,13 +515,56 @@
 
 				{#if currentSection.title === SETTINGS_SECTION_TITLES.IMPORT_EXPORT}
 					<ChatSettingsImportExportTab />
+				{:else if currentSection.title === SETTINGS_SECTION_TITLES.BACKENDS}
+					<InferenceBackendSettings />
+				{:else if currentSection.title === SETTINGS_SECTION_TITLES.LIBRARIES}
+					<LibrariesTab />
 				{:else}
 					<div class="space-y-6">
+						{#if currentSection.title === SETTINGS_SECTION_TITLES.SAMPLING}
+							<div class="flex items-center justify-between pb-2 border-b border-border/30">
+								<p class="text-xs text-muted-foreground">Mode: <strong>{currentMode()}</strong> · Overrides apply to this mode only</p>
+								<button
+									onclick={handleResetSampling}
+									class="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+									title="Reset sampling to admin defaults"
+								>
+									<RotateCcw class="h-3 w-3" />
+									Reset to admin defaults
+								</button>
+							</div>
+						{:else if currentSection.title === SETTINGS_SECTION_TITLES.PENALTIES}
+							<div class="flex items-center justify-between pb-2 border-b border-border/30">
+								<p class="text-xs text-muted-foreground">Mode: <strong>{currentMode()}</strong> · Overrides apply to this mode only</p>
+								<button
+									onclick={handleResetPenalties}
+									class="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+									title="Reset penalties to admin defaults"
+								>
+									<RotateCcw class="h-3 w-3" />
+									Reset to admin defaults
+								</button>
+							</div>
+						{:else if currentSection.title === SETTINGS_SECTION_TITLES.GENERAL}
+							<div class="flex justify-end pb-2">
+								<button
+									onclick={handleResetAllOverrides}
+									class="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+									title="Clear all sampling and penalty overrides for current mode"
+								>
+									<RotateCcw class="h-3 w-3" />
+									Reset all sampling overrides
+								</button>
+							</div>
+						{/if}
 						<ChatSettingsFields
 							fields={currentSection.fields}
 							{localConfig}
 							onConfigChange={handleConfigChange}
 							onThemeChange={handleThemeChange}
+							adminDefaults={adminHints}
+							ollamaDefaults={ollamaHints}
+							caps={capHints}
 						/>
 					</div>
 				{/if}

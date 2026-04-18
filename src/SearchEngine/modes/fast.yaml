@@ -1,19 +1,18 @@
-# Fast mode — keyword-first retrieval, no query-time embedding
-#
-# Stage 1: FTS5 BM25 finds the best matching article by title
-# Stage 2: keyword score against all stored chunk texts for that article
-# Result:  top chunks passed to LLM for a quick answer
+# Fast mode — bare Ollama request, no llm_options specified.
+# Mirrors RAGv2 evaluation conditions for fair comparison.
 
 retrieval:
   faiss_candidates: 20       # FAISS top-k pool (top_k × 2)
   bm25_candidates: 20        # BM25 title matches (top_k × 2)
   top_k: 2                   # chunks returned to LLM
+  answer_filter: false
 
-llm_model: "qwen2.5:0.5b"
-llm_options:
-  num_predict: 80
-  num_ctx: 512
-  temperature: 0.0
-  keep_alive: "25m"
+# llm_model: inherit from _active_model (set via UI or config.yaml ai_mode.llm_model)
+# No llm_options — Ollama uses model defaults, same as RAGv2
+think: false   # retrieval already handles reasoning; thinking loops waste context
 
 system_prompt: "prompts/ai_mode_fast.md"
+
+caps:
+  num_predict: 400
+  temperature: 2.0

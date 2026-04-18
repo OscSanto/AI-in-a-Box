@@ -7,6 +7,8 @@ export const SETTINGS_SECTION_TITLES = {
 	SAMPLING: 'Sampling',
 	PENALTIES: 'Penalties',
 	IMPORT_EXPORT: 'Import/Export',
+	BACKENDS: 'Backends',
+	LIBRARIES: 'Libraries',
 	DEVELOPER: 'Developer'
 } as const;
 

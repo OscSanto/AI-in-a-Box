@@ -1,5 +1,5 @@
 """
-Phase 1 ZIM indexing pipeline.
+ZIM indexing pipeline.
 
 Two separate steps to keep memory bounded on low-RAM devices:
 
@@ -21,8 +21,6 @@ import re
 import time
 from pathlib import Path
 
-import numpy as np
-
 from libzim.reader import Archive
 
 from zim_indexer import db, extract
@@ -38,10 +36,9 @@ _SKIP_RE = re.compile(
 _SKIP_NS = {"Category", "Template", "Portal", "File", "Help", "Special",
              "Talk", "Wikipedia", "User", "MediaWiki", "Module"}
 
-_PHASE1_LEAD    = 3   # semantic lead units guaranteed embedded
-_PHASE1_INFOBOX = 10  # infobox rows guaranteed embedded, independent of prose count
-_PHASE1_PROSE   = 12  # section units guaranteed embedded (+ lead + infobox = 25 total)
-_PHASE1_CHUNKS  = _PHASE1_LEAD + _PHASE1_INFOBOX + _PHASE1_PROSE  # = 25
+_PRIORITY_LEAD    = 3   # lead units placed first in the embedding queue
+_PRIORITY_INFOBOX = 10  # infobox rows placed early, independent of prose count
+_PRIORITY_PROSE   = 12  # prose units placed early after lead/infobox chunks
 _EMBED_BATCH   = 16   # small batches — keeps ONNX + vector RAM low
 _SAVE_EVERY    = 128  # write FAISS to disk every N chunks (lose less on crash)
 
@@ -145,7 +142,7 @@ def run_extract(zim_path: Path):
         url = path if path.startswith("A/") else f"A/{path}"
 
         # Build lead / infobox / prose lists before assigning chunk_index,
-        # so each content type gets independent guaranteed phase-1 coverage.
+        # so each content type gets early coverage if embedding is interrupted.
         lead_units = [
             {
                 "section_title": "Lead",
@@ -167,8 +164,8 @@ def run_extract(zim_path: Path):
                 })
 
         # Round-robin across sections: take 1 para from each section before
-        # taking a 2nd from any section.  This guarantees every section gets
-        # FAISS coverage in phase-1, even if the article has many sections.
+        # taking a 2nd from any section. This gives many sections early FAISS
+        # coverage even if the full embedding job is interrupted.
         _sec_lists = [
             {"title": sec["title"], "paras": sec["paragraphs"]}
             for sec in parsed["sections"]
@@ -185,17 +182,17 @@ def run_extract(zim_path: Path):
                                                            _sec["paras"][_round]),
                     })
 
-        # Ordering: phase-1 lead | phase-1 infobox | phase-1 prose
+        # Ordering: priority lead | priority infobox | priority prose
         #           | remaining lead | remaining prose | remaining infobox
-        # chunk_index < _PHASE1_CHUNKS (25) → embedded=1 in --embed step.
-        # Both types get their own guaranteed slots regardless of how many the other has.
+        # The --embed step still embeds every chunk. This order only controls
+        # which chunks are embedded first during resumable/incremental runs.
         ordered = (
-            lead_units[:_PHASE1_LEAD]
-            + infobox_chunks[:_PHASE1_INFOBOX]
-            + prose_chunks[:_PHASE1_PROSE]
-            + lead_units[_PHASE1_LEAD:]
-            + prose_chunks[_PHASE1_PROSE:]
-            + infobox_chunks[_PHASE1_INFOBOX:]
+            lead_units[:_PRIORITY_LEAD]
+            + infobox_chunks[:_PRIORITY_INFOBOX]
+            + prose_chunks[:_PRIORITY_PROSE]
+            + lead_units[_PRIORITY_LEAD:]
+            + prose_chunks[_PRIORITY_PROSE:]
+            + infobox_chunks[_PRIORITY_INFOBOX:]
         )
 
         all_chunks = [
@@ -232,7 +229,7 @@ def run_extract(zim_path: Path):
 
 def run_embed(zim_path: Path):
     """
-    Embed pending Phase 1 chunks into FAISS.
+    Embed every pending chunk into FAISS.
     Runs as a separate process — starts with a clean memory slate after extraction.
     Fetches _EMBED_BATCH rows at a time so RAM stays bounded.
     """
@@ -261,7 +258,7 @@ def run_embed(zim_path: Path):
         con.close()
         return
 
-    print(f"  {total_pending:,} chunks to embed (batch={_EMBED_BATCH})...", flush=True)
+    print(f"  {total_pending:,} pending chunks to embed (batch={_EMBED_BATCH})...", flush=True)
     t0   = time.time()
     done = 0
 
@@ -271,6 +268,7 @@ def run_embed(zim_path: Path):
     # continue the main loop for the rest. Each chunk is only embedded once.
     if idx.ntotal == 0 and total_pending >= faiss_index._IVF_MIN_N:
         import math
+        import numpy as np
         nlist    = max(4, min(int(math.sqrt(total_pending)), 4096))
         train_n  = min(max(nlist * 39, 5_000), total_pending)
         print(f"  Training IVFFlat — fetching {train_n:,} vectors "
@@ -293,6 +291,14 @@ def run_embed(zim_path: Path):
             texts = [r[1] for r in rows]
             train_ids.extend(ids)
             train_vecs_list.append(embed.encode(texts))
+            if len(train_ids) % (_EMBED_BATCH * 25) == 0 or len(train_ids) >= train_n:
+                elapsed = time.time() - t0
+                rate = len(train_ids) / elapsed if elapsed > 0 else 0
+                print(
+                    f"  Training vectors {len(train_ids):,}/{train_n:,} "
+                    f"({rate:.0f} chunks/s)",
+                    flush=True,
+                )
             del ids, texts, rows
 
         train_vecs = np.vstack(train_vecs_list)
@@ -359,7 +365,7 @@ def run_embed(zim_path: Path):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Phase 1 ZIM indexer")
+    parser = argparse.ArgumentParser(description="ZIM indexer")
     parser.add_argument("zim", help="Path to .zim file")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--extract", action="store_true", help="Extract only (no embedding)")

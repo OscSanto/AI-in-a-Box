@@ -7,6 +7,11 @@ export interface ArticleSource {
 	title: string;
 	url: string;
 	snippet: string;
+	section?: string;
+	context?: string;
+	rerank_score?: number;
+	faiss_score?: number;
+	zim_name?: string;
 }
 
 let _articles = $state<ArticleSource[]>([]);

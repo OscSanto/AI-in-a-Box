@@ -8,6 +8,7 @@ import {
 	UrlPrefix
 } from '$lib/enums';
 import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
+import type { ArticleSource } from '$lib/stores/articlesStore.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { AGENTIC_REGEX } from '$lib/constants/agentic';
 
@@ -73,6 +74,7 @@ export class ChatService {
 			onToolCallChunk,
 			onSources,
 			onSeMetrics,
+			onBackend,
 			onModel,
 			onTimings,
 			// Tools for function calling
@@ -104,7 +106,10 @@ export class ChatService {
 			custom,
 			timings_per_token,
 			// Config options
-			disableReasoningParsing
+			disableReasoningParsing,
+			zim,
+			bypass_cache,
+			log_level
 		} = options;
 
 		const normalizedMessages: ApiChatMessageData[] = messages
@@ -173,6 +178,15 @@ export class ChatService {
 		// Pipeline mode selected by the user (kiwix / chat / summarize)
 		if (options.mode) {
 			(requestBody as Record<string, unknown>).mode = options.mode;
+		}
+		if (zim) (requestBody as Record<string, unknown>).zim = zim;
+		if (bypass_cache !== undefined) (requestBody as Record<string, unknown>).bypass_cache = bypass_cache;
+		if (log_level) (requestBody as Record<string, unknown>).log_level = log_level;
+
+		// User sampling overrides — merged server-side over mode YAML (Ollama-supported keys only)
+		const userLlmOptions = (options as SettingsChatServiceOptions).user_llm_options;
+		if (userLlmOptions && Object.keys(userLlmOptions).length > 0) {
+			(requestBody as Record<string, unknown>).user_llm_options = userLlmOptions;
 		}
 
 		requestBody.reasoning_format = disableReasoningParsing
@@ -254,7 +268,8 @@ export class ChatService {
 					onTimings,
 					conversationId,
 					signal,
-					onSeMetrics
+					onSeMetrics,
+					onBackend
 				);
 
 				return;
@@ -335,12 +350,13 @@ export class ChatService {
 		onError?: (error: Error) => void,
 		onReasoningChunk?: (chunk: string) => void,
 		onToolCallChunk?: (chunk: string) => void,
-		onSources?: (sources: { title: string; url: string; snippet: string }[]) => void,
+		onSources?: (sources: ArticleSource[]) => void,
 		onModel?: (model: string) => void,
 		onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void,
 		conversationId?: string,
 		abortSignal?: AbortSignal,
-		onSeMetrics?: (metrics: Record<string, unknown>) => void
+		onSeMetrics?: (metrics: Record<string, unknown>) => void,
+		onBackend?: (backend: string) => void
 	): Promise<void> {
 		const reader = response.body?.getReader();
 
@@ -432,10 +448,13 @@ export class ChatService {
 							const timings = parsed.timings;
 							const promptProgress = parsed.prompt_progress;
 							const sources = (parsed as Record<string, unknown>).sources as
-								| { title: string; url: string; snippet: string }[]
+								| ArticleSource[]
 								| undefined;
 							const seMetrics = (parsed as Record<string, unknown>).se_metrics as
 								| Record<string, unknown>
+								| undefined;
+							const backendName = (parsed as Record<string, unknown>).backend as
+								| string
 								| undefined;
 
 							const chunkModel = ChatService.extractModelName(parsed);
@@ -459,6 +478,10 @@ export class ChatService {
 
 							if (seMetrics && !abortSignal?.aborted) {
 								onSeMetrics?.(seMetrics);
+							}
+
+							if (backendName && !abortSignal?.aborted) {
+								onBackend?.(backendName);
 							}
 
 							if (content) {

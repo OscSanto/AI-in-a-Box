@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { completeRagCommand } from '$lib/stores/ragControls.svelte';
 	import { autoResizeTextarea } from '$lib/utils';
 	import { onMount } from 'svelte';
 
@@ -44,6 +45,26 @@
 			textareaElement.style.height = '1rem';
 		}
 	}
+
+	function handleKeydown(event: KeyboardEvent) {
+		if (event.key === 'Tab' && textareaElement) {
+			const completion = completeRagCommand(value, textareaElement.selectionStart);
+			if (completion) {
+				event.preventDefault();
+				value = completion;
+				queueMicrotask(() => {
+					if (!textareaElement) return;
+					textareaElement.selectionStart = completion.length;
+					textareaElement.selectionEnd = completion.length;
+					autoResizeTextarea(textareaElement);
+				});
+				onInput?.();
+				return;
+			}
+		}
+
+		onKeydown?.(event);
+	}
 </script>
 
 <div class="flex-1 {className}">
@@ -53,7 +74,7 @@
 		class="text-md max-h-32 min-h-12 w-full resize-none border-0 bg-transparent p-0 leading-6 outline-none placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
 		class:cursor-not-allowed={disabled}
 		{disabled}
-		onkeydown={onKeydown}
+		onkeydown={handleKeydown}
 		oninput={(event) => {
 			autoResizeTextarea(event.currentTarget);
 			onInput?.();

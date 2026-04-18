@@ -17,6 +17,9 @@ import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { setArticles } from '$lib/stores/articlesStore.svelte';
 import { pipelineMode } from '$lib/stores/pipelineMode.svelte';
+import { ragControls } from '$lib/stores/ragControls.svelte';
+import { samplingOverridesStore } from '$lib/stores/samplingOverrides.svelte';
+import { inferenceBackendsStore } from '$lib/stores/inferenceBackends.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
 import {
 	selectedModelName,
@@ -380,9 +383,21 @@ class ChatStore {
 			}
 			const am = conversationsStore.activeMessages;
 			const firstActiveMessage = am.find((m) => m.parent === rootId);
+			// Pre-fill with the current mode's default system prompt from the backend
+			let defaultPrompt = SYSTEM_MESSAGE_PLACEHOLDER;
+			try {
+				const currentMode = ragControls().mode;
+				const cfgRes = await fetch('/api/config');
+				if (cfgRes.ok) {
+					const cfg = await cfgRes.json();
+					const modeKey = currentMode === 'chat' ? 'balanced' : currentMode;
+					const modePrompt = cfg?.modes?.[modeKey]?.system_prompt?.trim();
+					if (modePrompt) defaultPrompt = modePrompt;
+				}
+			} catch { /* fall back to placeholder */ }
 			const systemMessage = await DatabaseService.createSystemMessage(
 				activeConv.id,
-				SYSTEM_MESSAGE_PLACEHOLDER,
+				defaultPrompt,
 				rootId
 			);
 			if (firstActiveMessage) {
@@ -561,6 +576,7 @@ class ChatStore {
 		let streamedExtras: DatabaseMessageExtra[] = assistantMessage.extra
 			? JSON.parse(JSON.stringify(assistantMessage.extra))
 			: [];
+		let streamedSources: NonNullable<DatabaseMessage['ragSources']> = [];
 		const recordModel = (modelName: string | null | undefined, persistImmediately = true): void => {
 			if (!modelName) return;
 			const n = normalizeModelName(modelName);
@@ -609,10 +625,18 @@ class ChatStore {
 		this.setActiveProcessingConversation(assistantMessage.convId);
 		const abortController = this.getOrCreateAbortController(assistantMessage.convId);
 		const streamCallbacks: ChatStreamCallbacks = {
-			onSources: (sources) => setArticles(sources),
+			onSources: (sources) => {
+				streamedSources = sources;
+				setArticles(sources);
+				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
+				conversationsStore.updateMessageAtIndex(idx, { ragSources: sources });
+			},
 			onSeMetrics: (metrics) => {
 				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
 				conversationsStore.updateMessageAtIndex(idx, { seMetrics: metrics });
+			},
+			onBackend: (backend: string) => {
+				inferenceBackendsStore.setActiveBackend(backend);
 			},
 			onChunk: (chunk: string) => appendContentChunk(chunk),
 			onReasoningChunk: (chunk: string) => appendReasoningChunk(chunk),
@@ -675,6 +699,7 @@ class ChatStore {
 					toolCalls: updateData.toolCalls as string
 				};
 				if (streamedExtras.length > 0) uiUpdate.extra = streamedExtras;
+				if (streamedSources.length > 0) uiUpdate.ragSources = streamedSources;
 				if (timings) uiUpdate.timings = timings;
 				if (resolvedModel) uiUpdate.model = resolvedModel;
 				conversationsStore.updateMessageAtIndex(idx, uiUpdate);
@@ -1450,9 +1475,18 @@ class ChatStore {
 
 	private getApiOptions(): Record<string, unknown> {
 		const currentConfig = config();
+		const rag = ragControls();
 		const hasValue = (value: unknown): boolean =>
 			value !== undefined && value !== null && value !== '';
-		const apiOptions: Record<string, unknown> = { stream: true, timings_per_token: true, mode: pipelineMode() };
+		const apiOptions: Record<string, unknown> = {
+			stream: true,
+			timings_per_token: true,
+			mode: rag.mode || pipelineMode(),
+			zim: rag.selectedZim,
+			bypass_cache: rag.bypassCache,
+			log_level: rag.logLevel,
+			think: rag.thinking
+		};
 
 		if (isRouterMode()) {
 			const modelName = selectedModelName();
@@ -1518,6 +1552,13 @@ class ChatStore {
 			apiOptions.backend_sampling = currentConfig.backend_sampling;
 
 		if (currentConfig.custom) apiOptions.custom = currentConfig.custom;
+
+		// User sampling overrides (per-mode, only explicitly changed values)
+		const modeKey = rag.mode === 'chat' ? 'balanced' : rag.mode;
+		const userOverrides = samplingOverridesStore.getForMode(modeKey);
+		if (Object.keys(userOverrides).length > 0) {
+			apiOptions.user_llm_options = userOverrides;
+		}
 
 		return apiOptions;
 	}

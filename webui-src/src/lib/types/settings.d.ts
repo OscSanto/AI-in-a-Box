@@ -1,6 +1,7 @@
 import type { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
 import type { DatabaseMessageExtra } from './database';
+import type { ArticleSource } from '$lib/stores/articlesStore.svelte';
 import type { ParameterSource, SyncableParameterType, SettingsFieldType } from '$lib/enums';
 
 export type SettingsConfigValue = string | number | boolean;
@@ -12,6 +13,8 @@ export interface SettingsFieldConfig {
 	isExperimental?: boolean;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof import('@lucide/svelte').Icon }>;
+	/** Gray out — not supported by Ollama (llama.cpp server only) */
+	ollamaUnsupported?: boolean;
 }
 
 export interface SettingsChatServiceOptions {
@@ -20,6 +23,9 @@ export interface SettingsChatServiceOptions {
 	model?: string;
 	// Pipeline mode selected by the user via UI buttons ("kiwix" | "chat" | "summarize")
 	mode?: string;
+	zim?: string;
+	bypass_cache?: boolean;
+	log_level?: string;
 	// System message to inject
 	systemMessage?: string;
 	// Disable reasoning parsing (use 'none' instead of 'auto')
@@ -51,12 +57,16 @@ export interface SettingsChatServiceOptions {
 	// Custom parameters
 	custom?: string;
 	timings_per_token?: boolean;
+	// User sampling overrides (merged server-side over mode YAML defaults)
+	user_llm_options?: Record<string, number>;
 	// Callbacks
 	onChunk?: (chunk: string) => void;
 	onReasoningChunk?: (chunk: string) => void;
 	onToolCallChunk?: (chunk: string) => void;
 	onAttachments?: (extras: DatabaseMessageExtra[]) => void;
-	onSources?: (sources: { title: string; url: string; snippet: string }[]) => void;
+	onSources?: (sources: ArticleSource[]) => void;
+	onSeMetrics?: (metrics: Record<string, unknown>) => void;
+	onBackend?: (backend: string) => void;
 	onModel?: (model: string) => void;
 	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
 	onComplete?: (

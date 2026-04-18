@@ -11,7 +11,7 @@ import numpy as np
 import faiss
 from pathlib import Path
 
-_DIM        = 384        # Snowflake/snowflake-arctic-embed-xs
+_DIM        = 384        # sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 _IVF_MIN_N  = 500_000   # FlatIP is fast enough below this (~5ms for 133k vecs);
                         # IVFFlat only worthwhile for Wikipedia-scale (1M+)
 _NPROBE     = 64         # clusters to search at query time (quality vs speed)

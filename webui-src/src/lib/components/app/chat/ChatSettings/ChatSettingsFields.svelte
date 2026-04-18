@@ -17,9 +17,15 @@
 		localConfig: SettingsConfigType;
 		onConfigChange: (key: string, value: string | boolean) => void;
 		onThemeChange?: (theme: string) => void;
+		/** Admin YAML default values keyed by UI field key */
+		adminDefaults?: Record<string, number | undefined>;
+		/** Ollama hardcoded defaults keyed by UI field key */
+		ollamaDefaults?: Record<string, number | undefined>;
+		/** Per-mode caps keyed by UI field key */
+		caps?: Record<string, number | undefined>;
 	}
 
-	let { fields, localConfig, onConfigChange, onThemeChange }: Props = $props();
+	let { fields, localConfig, onConfigChange, onThemeChange, adminDefaults = {}, ollamaDefaults = {}, caps = {} }: Props = $props();
 
 	// Helper function to get parameter source info for syncable parameters
 	function getParameterSourceInfo(key: string) {
@@ -39,30 +45,32 @@
 			{@const propsDefault = paramInfo?.serverDefault}
 			{@const isCustomRealTime = (() => {
 				if (!paramInfo || propsDefault === undefined) return false;
-
-				// Apply same rounding logic for real-time comparison
-				const inputValue = currentValue;
-				const numericInput = parseFloat(inputValue);
+				const numericInput = parseFloat(currentValue);
 				const normalizedInput = !isNaN(numericInput)
 					? Math.round(numericInput * 1000000) / 1000000
-					: inputValue;
+					: currentValue;
 				const normalizedDefault =
 					typeof propsDefault === 'number'
 						? Math.round(propsDefault * 1000000) / 1000000
 						: propsDefault;
-
 				return normalizedInput !== normalizedDefault;
 			})()}
+			{@const adminVal = adminDefaults[field.key]}
+			{@const ollamaVal = ollamaDefaults[field.key]}
+			{@const capVal = caps[field.key]}
+			{@const isUnsupported = field.ollamaUnsupported === true}
 
-			<div class="flex items-center gap-2">
+			<div class="flex items-center gap-2 {isUnsupported ? 'opacity-50' : ''}">
 				<Label for={field.key} class="flex items-center gap-1.5 text-sm font-medium">
 					{field.label}
-
 					{#if field.isExperimental}
 						<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
 					{/if}
+					{#if isUnsupported}
+						<span class="rounded bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">llama.cpp only</span>
+					{/if}
 				</Label>
-				{#if isCustomRealTime}
+				{#if isCustomRealTime && !isUnsupported}
 					<ChatSettingsParameterSourceIndicator />
 				{/if}
 			</div>
@@ -71,19 +79,18 @@
 				<Input
 					id={field.key}
 					value={currentValue}
+					disabled={isUnsupported}
 					oninput={(e) => {
-						// Update local config immediately for real-time badge feedback
 						onConfigChange(field.key, e.currentTarget.value);
 					}}
-					placeholder={`Default: ${SETTING_CONFIG_DEFAULT[field.key] ?? 'none'}`}
-					class="w-full {isCustomRealTime ? 'pr-8' : ''}"
+					placeholder={adminVal !== undefined ? String(adminVal) : `${SETTING_CONFIG_DEFAULT[field.key] ?? 'none'}`}
+					class="w-full {isCustomRealTime && !isUnsupported ? 'pr-8' : ''} {isUnsupported ? 'cursor-not-allowed' : ''}"
 				/>
-				{#if isCustomRealTime}
+				{#if isCustomRealTime && !isUnsupported}
 					<button
 						type="button"
 						onclick={() => {
 							settingsStore.resetParameterToServerDefault(field.key);
-							// Trigger UI update by calling onConfigChange with the default value
 							const defaultValue = propsDefault ?? SETTING_CONFIG_DEFAULT[field.key];
 							onConfigChange(field.key, String(defaultValue));
 						}}
@@ -95,11 +102,24 @@
 					</button>
 				{/if}
 			</div>
-			{#if field.help || SETTING_CONFIG_INFO[field.key]}
-				<p class="mt-1 text-xs text-muted-foreground">
-					{@html field.help || SETTING_CONFIG_INFO[field.key]}
-				</p>
-			{/if}
+			<p class="mt-1 text-xs text-muted-foreground">
+				{#if isUnsupported}
+					Not supported by Ollama — requires llama.cpp server.
+				{:else}
+					{#if adminVal !== undefined || ollamaVal !== undefined || capVal !== undefined}
+						<span class="inline-flex flex-wrap gap-x-3">
+							{#if adminVal !== undefined}<span>Admin default: <strong>{adminVal}</strong></span>{/if}
+							{#if ollamaVal !== undefined && adminVal === undefined}<span>Ollama default: <strong>{ollamaVal}</strong></span>{/if}
+							{#if capVal !== undefined}<span>Cap: <strong>{capVal}</strong></span>{/if}
+						</span>
+						{#if field.help || SETTING_CONFIG_INFO[field.key]}
+							<br />{@html field.help || SETTING_CONFIG_INFO[field.key]}
+						{/if}
+					{:else if field.help || SETTING_CONFIG_INFO[field.key]}
+						{@html field.help || SETTING_CONFIG_INFO[field.key]}
+					{/if}
+				{/if}
+			</p>
 		{:else if field.type === SettingsFieldType.TEXTAREA}
 			<Label for={field.key} class="block flex items-center gap-1.5 text-sm font-medium">
 				{field.label}
