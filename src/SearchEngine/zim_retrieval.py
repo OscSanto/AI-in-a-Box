@@ -76,6 +76,7 @@ _W_SEMANTIC  = float(_WEIGHT_CFG.get("semantic", 0.24))
 _W_PARA_BM25 = float(_WEIGHT_CFG.get("paragraph_bm25", 0.16))
 _W_TITLE     = float(_WEIGHT_CFG.get("title_bm25", 0.08))
 _W_SECTION   = float(_WEIGHT_CFG.get("section_overlap", 0.08))
+_W_ASPECT    = float(_WEIGHT_CFG.get("aspect_section", 0.08))
 _W_TITLE_TOK = float(_WEIGHT_CFG.get("title_query_overlap", 0.04))
 _W_COVERAGE  = float(_WEIGHT_CFG.get("query_coverage", 0.03))
 _W_STRUCTURE = float(_WEIGHT_CFG.get("structure_prior", 0.03))
@@ -481,7 +482,7 @@ class _ZimHandle:
                     continue
                 title = parsed.get("title") or entry.title
                 for sec in parsed.get("sections", [])[:3]:
-                    for text in sec.get("chunks", [])[:2]:
+                    for text in sec.get("paragraphs", [])[:2]:
                         chunks.append({
                             "chunk_id":          abs(hash(path + text)) % (2**31),
                             "article_id":        abs(hash(path)) % (2**31),
@@ -886,12 +887,8 @@ def _rerank(chunks: list[dict],
             + _W_SEMANTIC  * n_sem.get(cid, 0.0)
             + _W_PARA_BM25 * n_par.get(cid, 0.0)
             + _W_TITLE     * n_tit.get(cid, 0.0)
-            + _W_SECTION   * n_sec.get(cid, 0.0),
-            5,
-        )
-        c["rerank_score"] = round(
-            c["rerank_score"]
-            + _W_SECTION   * n_aspect.get(cid, 0.0)
+            + _W_SECTION   * n_sec.get(cid, 0.0)
+            + _W_ASPECT    * n_aspect.get(cid, 0.0)
             + _W_TITLE_TOK * n_title_tok.get(cid, 0.0)
             + _W_COVERAGE  * n_cov.get(cid, 0.0)
             + _W_STRUCTURE * n_struct.get(cid, 0.0),

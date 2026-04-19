@@ -41,14 +41,15 @@ retrieval:
   cross_zim_strong_score: 0.80  # apply cross-ZIM filtering only when top semantic score is strong
   cross_zim_margin: 0.05        # keep other ZIM hits only if within this FAISS score margin
   weights:
-    fusion: 0.34
-    semantic: 0.24
-    paragraph_bm25: 0.16
-    title_bm25: 0.08
-    section_overlap: 0.08
-    title_query_overlap: 0.04
-    query_coverage: 0.03
-    structure_prior: 0.03
+    fusion: 0.315
+    semantic: 0.222
+    paragraph_bm25: 0.148
+    title_bm25: 0.074
+    section_overlap: 0.074
+    aspect_section: 0.074
+    title_query_overlap: 0.037
+    query_coverage: 0.028
+    structure_prior: 0.028
 
 # Android inference offloading.
 # If set, LLM generation is routed to the Android app instead of Ollama.
@@ -71,6 +72,7 @@ zim_on_demand:
   max_articles_per_zim: 2000     # default on-demand embed limit (per ZIM)
   max_vectors_per_zim: 500000    # default FAISS vector cap (per ZIM)
 
+# Hand-picked models recommended for the raspberry Pi 5's 4 GB RAM. These are used in the UI and as defaults for modes.
 model_store:
   families:
     - name: "Qwen 2.5"
