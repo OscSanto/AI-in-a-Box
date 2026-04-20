@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Plus, Trash2, CheckCircle, XCircle, Loader, RefreshCw, Wifi, ChevronUp, ChevronDown } from '@lucide/svelte';
+	import { Plus, Trash2, CheckCircle, XCircle, Loader, RefreshCw, Wifi, ChevronUp, ChevronDown, Zap } from '@lucide/svelte';
 	import { inferenceBackendsStore, type InferenceBackend } from '$lib/stores/inferenceBackends.svelte';
 
 	// Local editable copy of user backends only (builtins are read-only)
@@ -8,10 +8,41 @@
 	let testResults = $state<Record<string, { healthy: boolean; models: string[]; testing: boolean }>>({});
 	let saveStatus = $state<'idle' | 'saving' | 'saved'>('idle');
 
+	// Flash Attention state
+	let flashAttention = $state(false);
+	let flashSaveStatus = $state<'idle' | 'saving' | 'saved'>('idle');
+
 	onMount(async () => {
 		await inferenceBackendsStore.load();
 		editableBackends = inferenceBackendsStore.userBackends.map((b) => ({ ...b }));
+
+		try {
+			const res = await fetch('/api/settings/performance');
+			if (res.ok) {
+				const data = await res.json();
+				flashAttention = data.flash_attention ?? false;
+			}
+		} catch { /* leave at default */ }
 	});
+
+	async function saveFlashAttention() {
+		flashSaveStatus = 'saving';
+		try {
+			const res = await fetch('/api/settings/performance', {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ flash_attention: flashAttention }),
+			});
+			if (res.ok) {
+				const data = await res.json();
+				flashAttention = data.flash_attention;
+				flashSaveStatus = 'saved';
+				setTimeout(() => (flashSaveStatus = 'idle'), 2500);
+			}
+		} catch {
+			flashSaveStatus = 'idle';
+		}
+	}
 
 	function addBackend() {
 		editableBackends = [
@@ -63,6 +94,50 @@
 </script>
 
 <div class="space-y-6">
+	<!-- Flash Attention -->
+	<div class="rounded-lg border border-border/40 p-4">
+		<div class="mb-3 flex items-center gap-2">
+			<Zap class="h-4 w-4 text-muted-foreground" />
+			<h4 class="text-sm font-medium">Ollama Performance</h4>
+		</div>
+		<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+			<div class="min-w-0 flex-1">
+				<p class="text-sm font-medium">Flash Attention</p>
+				<p class="mt-0.5 text-xs text-muted-foreground">
+					Reduces VRAM usage during inference using the FlashAttention kernel.
+					Primarily beneficial for GPU backends — minimal effect on CPU-only devices like Raspberry Pi.
+					Changes take effect after restarting Ollama.
+				</p>
+				{#if flashSaveStatus === 'saved'}
+					<p class="mt-1.5 flex items-center gap-1 text-xs text-amber-500 dark:text-amber-400">
+						<CheckCircle class="h-3 w-3" />
+						Saved — restart Ollama to apply:
+						<code class="rounded bg-muted px-1 font-mono">sudo systemctl restart ollama</code>
+					</p>
+				{/if}
+			</div>
+			<div class="flex shrink-0 items-center gap-2 self-start">
+				<input
+					type="checkbox"
+					id="flash-attention-toggle"
+					bind:checked={flashAttention}
+					class="h-4 w-4 accent-primary"
+				/>
+				<button
+					class="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+					onclick={saveFlashAttention}
+					disabled={flashSaveStatus === 'saving'}
+				>
+					{#if flashSaveStatus === 'saving'}
+						<Loader class="h-3 w-3 animate-spin" />
+					{:else}
+						Save
+					{/if}
+				</button>
+			</div>
+		</div>
+	</div>
+
 	<!-- Built-in backends (read-only status display) -->
 	{#if builtinBackends.length > 0}
 		<div>
@@ -129,12 +204,12 @@
 
 							<div class="min-w-0 flex-1 space-y-2">
 								<!-- Name + URL row -->
-								<div class="flex gap-2">
+								<div class="flex flex-col gap-2 sm:flex-row">
 									<input
 										type="text"
 										bind:value={backend.name}
 										placeholder="Name (e.g. Home GPU)"
-										class="w-28 shrink-0 rounded-md border border-border/60 bg-background px-2 py-1 text-sm outline-none focus:border-primary"
+										class="w-full shrink-0 rounded-md border border-border/60 bg-background px-2 py-1 text-sm outline-none focus:border-primary sm:w-28"
 									/>
 									<input
 										type="text"

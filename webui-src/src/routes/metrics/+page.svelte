@@ -259,10 +259,17 @@
 <style>
 	.page {
 		min-height: 100vh;
+		width: 100%;
+		box-sizing: border-box;
+		overflow-x: hidden;
 		background: var(--background);
 		color: var(--foreground);
 		font-family: 'JetBrains Mono', 'Fira Code', monospace, sans-serif;
 		padding: 24px;
+	}
+
+	@media (max-width: 480px) {
+		.page { padding: 14px 12px; }
 	}
 
 	.header {
@@ -306,7 +313,7 @@
 		border-radius: 10px;
 		padding: 18px;
 	}
-	.card.wide { grid-column: span 2; }
+	.card.wide { grid-column: 1 / -1; }
 
 	.card-title {
 		font-size: 10px;
@@ -381,9 +388,9 @@
 
 	/* Network */
 	.net-table { display: flex; flex-direction: column; gap: 6px; }
-	.net-row { display: flex; align-items: baseline; gap: 12px; font-size: 11px; flex-wrap: wrap; }
-	.net-iface { color: var(--foreground); font-weight: 600; min-width: 60px; }
-	.net-ip { color: var(--muted-foreground); }
+	.net-row { display: flex; align-items: baseline; gap: 8px; font-size: 11px; flex-wrap: wrap; min-width: 0; }
+	.net-iface { color: var(--foreground); font-weight: 600; min-width: 50px; }
+	.net-ip { color: var(--muted-foreground); word-break: break-all; }
 	.net-stat { color: var(--muted-foreground); }
 	.net-err { color: #ff6644; }
 

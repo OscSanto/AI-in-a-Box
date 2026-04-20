@@ -8,7 +8,9 @@ The "active model" is a runtime-switchable override: the UI model picker writes
 here, and the chat endpoint reads it. It starts from the mode YAML default and
 can be changed without restarting the server.
 """
+import re
 import threading
+from pathlib import Path
 
 import httpx
 import ollama
@@ -56,6 +58,23 @@ _OLLAMA_SAMPLING_DEFAULTS: dict = {
 }
 
 OLLAMA_SUPPORTED_KEYS: frozenset = frozenset(_OLLAMA_SAMPLING_DEFAULTS) | {"num_predict"}
+
+
+# ── Performance settings ──────────────────────────────────────────────────────
+
+_CFG_FILE = Path(__file__).parent.parent / "SearchEngine" / "config.yaml"
+
+
+def _set_config_bool(key: str, value: bool) -> None:
+    """Update a top-level boolean key in config.yaml, preserving all comments."""
+    text = _CFG_FILE.read_text()
+    new_line = f"{key}: {'true' if value else 'false'}"
+    pattern = re.compile(rf"^{re.escape(key)}:.*$", re.MULTILINE)
+    if pattern.search(text):
+        text = pattern.sub(new_line, text)
+    else:
+        text = new_line + "\n" + text
+    _CFG_FILE.write_text(text)
 
 
 # ── Curated model store ───────────────────────────────────────────────────────
@@ -189,6 +208,29 @@ async def pull_model(request: Request):
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(_stream_pull(), media_type="text/event-stream")
+
+
+@router.get("/api/settings/performance")
+def get_performance_settings():
+    """Return current Ollama performance settings."""
+    import yaml
+    cfg = yaml.safe_load(_CFG_FILE.read_text())
+    return JSONResponse({
+        "flash_attention": bool(cfg.get("ollama_flash_attention", False)),
+    })
+
+
+@router.patch("/api/settings/performance")
+async def patch_performance_settings(request: Request):
+    """Persist Ollama performance settings to config.yaml."""
+    body = await request.json()
+    if "flash_attention" in body:
+        _set_config_bool("ollama_flash_attention", bool(body["flash_attention"]))
+    import yaml
+    cfg = yaml.safe_load(_CFG_FILE.read_text())
+    return JSONResponse({
+        "flash_attention": bool(cfg.get("ollama_flash_attention", False)),
+    })
 
 
 @router.get("/api/sampling-config")

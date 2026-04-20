@@ -85,11 +85,15 @@ def health():
 @app.get("/config")
 def client_config():
     """Runtime config for the WebUI (mode, ZIM list)."""
+    import yaml as _yaml
+    from pathlib import Path as _Path
     from api.chat import _available_zim_names
+    _cfg = _yaml.safe_load((_Path(__file__).parent / "SearchEngine" / "config.yaml").read_text())
     return {
         "inference_default_mode": "server",
         "inference_allow_user_toggle": True,
         "zims": _available_zim_names(),
+        "flash_attention": bool(_cfg.get("ollama_flash_attention", False)),
     }
 
 

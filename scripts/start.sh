@@ -16,5 +16,17 @@ sleep 1
 
 cd "$PROJECT_DIR"
 
+# Read flash attention setting from config.yaml and export for Ollama
+FLASH_ATTN=$(python3 -c "
+import yaml, sys
+try:
+    c = yaml.safe_load(open('SearchEngine/config.yaml'))
+    print('1' if c.get('ollama_flash_attention') else '0')
+except Exception:
+    print('0')
+" 2>/dev/null || echo "0")
+export OLLAMA_FLASH_ATTENTION="$FLASH_ATTN"
+[ "$FLASH_ATTN" = "1" ] && echo "Flash Attention: enabled" || echo "Flash Attention: disabled"
+
 echo "Starting WebUI + RAG on http://$HOST:$PORT"
 exec uvicorn main:app --host "$HOST" --port "$PORT"

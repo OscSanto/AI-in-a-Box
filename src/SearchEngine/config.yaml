@@ -1,4 +1,5 @@
 ollama_timeout: 300       # seconds before an Ollama LLM call is abandoned
+ollama_flash_attention: false  # OLLAMA_FLASH_ATTENTION — GPU VRAM optimization; minimal gain on CPU-only Pi
 # Changing this requires rebuilding/re-embedding every ZIM FAISS index.
 # Query embeddings must use the same model/vector space as the stored FAISS vectors.
 embed_hf_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"  # 384-dim, 50+ languages — shared with zim_indexer, single model in RAM

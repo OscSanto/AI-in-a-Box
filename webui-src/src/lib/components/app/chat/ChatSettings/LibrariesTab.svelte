@@ -67,8 +67,8 @@
 
 <div class="space-y-4">
 	<!-- Header -->
-	<div class="flex items-center justify-between pb-2 border-b border-border/30">
-		<p class="text-xs text-muted-foreground">
+	<div class="flex items-center justify-between gap-3 pb-2 border-b border-border/30">
+		<p class="min-w-0 flex-1 text-xs text-muted-foreground">
 			ZIM libraries discovered in the configured folder. Toggle to include/exclude from search.
 		</p>
 		<button
@@ -149,20 +149,20 @@
 
 					<!-- Stats grid -->
 					<div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
-						<div class="flex items-center gap-1.5">
+						<div class="flex items-center gap-1.5 min-w-0">
 							<HardDrive class="h-3 w-3 flex-shrink-0" />
-							<span>ZIM: <strong class="text-foreground">{formatMb(lib.zim_size_mb)}</strong></span>
+							<span class="truncate">ZIM: <strong class="text-foreground">{formatMb(lib.zim_size_mb)}</strong></span>
 						</div>
 						{#if lib.is_indexed}
-							<div class="flex items-center gap-1.5">
+							<div class="flex items-center gap-1.5 min-w-0">
 								<Database class="h-3 w-3 flex-shrink-0" />
-								<span>DB: <strong class="text-foreground">{formatMb(lib.db_size_mb)}</strong></span>
+								<span class="truncate">DB: <strong class="text-foreground">{formatMb(lib.db_size_mb)}</strong></span>
 							</div>
-							<div>Vectors: <strong class="text-foreground">{formatCount(lib.vector_count)}</strong> / {formatCount(lib.max_vectors)}</div>
-							<div>Chunks: <strong class="text-foreground">{formatCount(lib.chunk_count)}</strong></div>
-							<div>Articles (indexed): <strong class="text-foreground">{formatCount(lib.indexed_article_count)}</strong> / {formatCount(lib.max_articles)}</div>
+							<div class="min-w-0 truncate">Vectors: <strong class="text-foreground">{formatCount(lib.vector_count)}</strong> / {formatCount(lib.max_vectors)}</div>
+							<div class="min-w-0 truncate">Chunks: <strong class="text-foreground">{formatCount(lib.chunk_count)}</strong></div>
+							<div class="col-span-2 min-w-0">Indexed: <strong class="text-foreground">{formatCount(lib.indexed_article_count)}</strong> / {formatCount(lib.max_articles)} articles</div>
 						{/if}
-						<div>Articles (total): <strong class="text-foreground">{formatCount(lib.archive_article_count)}</strong></div>
+						<div class="min-w-0 truncate">Total: <strong class="text-foreground">{formatCount(lib.archive_article_count)}</strong> articles</div>
 					</div>
 
 					<!-- Controls row (count + title index + embed) -->
