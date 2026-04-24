@@ -1,17 +1,19 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { Plus, MessageSquare } from '@lucide/svelte';
+	import { Plus, MessageSquare, Sparkles, Brain, RotateCcw } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { FILE_TYPE_ICONS } from '$lib/constants/icons';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants/tooltip-config';
+	import { ragControls, setBypassCache, toggleThinking, resetRagControls } from '$lib/stores/ragControls.svelte';
 
 	interface Props {
 		class?: string;
 		disabled?: boolean;
 		hasAudioModality?: boolean;
 		hasVisionModality?: boolean;
+		supportsThinking?: boolean;
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
 	}
@@ -21,9 +23,12 @@
 		disabled = false,
 		hasAudioModality = false,
 		hasVisionModality = false,
+		supportsThinking = false,
 		onFileUpload,
 		onSystemPromptClick
 	}: Props = $props();
+
+	let currentThinking = $derived(ragControls().thinking);
 
 	let isNewChat = $derived(!page.params.id);
 
@@ -61,7 +66,7 @@
 			</Tooltip.Root>
 		</DropdownMenu.Trigger>
 
-		<DropdownMenu.Content align="start" class="w-48">
+		<DropdownMenu.Content align="start" class="w-64">
 			{#if hasVisionModality}
 				<DropdownMenu.Item
 					class="images-button flex cursor-pointer items-center gap-2"
@@ -168,6 +173,64 @@
 					<p>{systemMessageTooltip}</p>
 				</Tooltip.Content>
 			</Tooltip.Root>
+
+			<DropdownMenu.Separator />
+			<DropdownMenu.Label class="text-[10px] uppercase tracking-wider text-muted-foreground/60">Commands</DropdownMenu.Label>
+
+			<!-- /new — bypass cache -->
+			<DropdownMenu.Item
+				class="flex cursor-pointer items-start gap-2 py-2"
+				onclick={() => setBypassCache(true)}
+			>
+				<Sparkles class="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+				<div class="min-w-0">
+					<p class="font-mono text-xs">/new</p>
+					<p class="text-xs text-muted-foreground">Skip cache — get a fresh answer</p>
+				</div>
+			</DropdownMenu.Item>
+
+			<!-- /think — reasoning mode (disabled if model doesn't support it) -->
+			{#if supportsThinking}
+				<DropdownMenu.Item
+					class="flex cursor-pointer items-start gap-2 py-2"
+					onclick={() => toggleThinking()}
+				>
+					<Brain class="mt-0.5 h-3.5 w-3.5 flex-shrink-0 {currentThinking ? 'text-violet-500' : ''}" />
+					<div class="min-w-0">
+						<p class="font-mono text-xs">/think</p>
+						<p class="text-xs text-muted-foreground">
+							{currentThinking ? 'Reasoning on — click to disable' : 'Step-by-step reasoning before answering'}
+						</p>
+					</div>
+				</DropdownMenu.Item>
+			{:else}
+				<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
+					<Tooltip.Trigger class="w-full">
+						<DropdownMenu.Item class="flex items-start gap-2 py-2 opacity-40" disabled>
+							<Brain class="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+							<div class="min-w-0">
+								<p class="font-mono text-xs">/think</p>
+								<p class="text-xs text-muted-foreground">Step-by-step reasoning before answering</p>
+							</div>
+						</DropdownMenu.Item>
+					</Tooltip.Trigger>
+					<Tooltip.Content side="right">
+						<p>Only available with reasoning models (e.g. DeepSeek-R1, QwQ)</p>
+					</Tooltip.Content>
+				</Tooltip.Root>
+			{/if}
+
+			<!-- /reset — reset all controls -->
+			<DropdownMenu.Item
+				class="flex cursor-pointer items-start gap-2 py-2"
+				onclick={() => resetRagControls()}
+			>
+				<RotateCcw class="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+				<div class="min-w-0">
+					<p class="font-mono text-xs">/reset</p>
+					<p class="text-xs text-muted-foreground">Reset mode, ZIM filter, and cache settings</p>
+				</div>
+			</DropdownMenu.Item>
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 </div>

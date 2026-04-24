@@ -5,7 +5,6 @@
 		ChatFormActionAttachmentsDropdown,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
-		ModelsSelector
 	} from '$lib/components/app';
 	import { FileTypeCategory } from '$lib/enums';
 	import { getFileTypeCategory } from '$lib/utils';
@@ -17,7 +16,8 @@
 	import {
 		ragControls,
 		setRagMode,
-		type RagMode
+		type RagMode,
+		modelSupportsThinking
 	} from '$lib/stores/ragControls.svelte';
 
 	let currentMode = $derived(ragControls().mode);
@@ -150,6 +150,9 @@
 		return modelOptions().some((option) => option.id === currentModelId);
 	});
 
+	let activeModelName = $derived(isRouter ? activeModelId : activeModelId);
+	let supportsThinking = $derived(modelSupportsThinking(activeModelName));
+
 	let submitTooltip = $derived.by(() => {
 		if (!hasModelSelected) {
 			return 'Please select a model first';
@@ -162,10 +165,8 @@
 		return '';
 	});
 
-	let selectorModelRef: ModelsSelector | undefined = $state(undefined);
-
 	export function openModelSelector() {
-		selectorModelRef?.open();
+		// No-op: model selector removed from chat form
 	}
 </script>
 
@@ -175,18 +176,19 @@
 			{disabled}
 			{hasAudioModality}
 			{hasVisionModality}
+			{supportsThinking}
 			{onFileUpload}
 			{onSystemPromptClick}
 		/>
 
 		<!-- Pipeline mode buttons -->
-		<div class="flex items-center gap-1 rounded-full border border-border bg-muted/40 p-0.5">
+		<div class="flex items-center gap-0.5 rounded-full border border-border bg-muted/40 p-0.5">
 			{#each MODES as m}
 				<button
 					type="button"
 					disabled={disabled}
 					onclick={() => setRagMode(m.value)}
-					class="rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors
+					class="rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors sm:px-2.5 sm:text-xs
 						{currentMode === m.value
 							? 'bg-primary text-primary-foreground shadow-sm'
 							: 'text-muted-foreground hover:text-foreground'}"
@@ -195,16 +197,6 @@
 				</button>
 			{/each}
 		</div>
-	</div>
-
-	<div class="ml-auto flex items-center gap-1.5">
-		<ModelsSelector
-			{disabled}
-			bind:this={selectorModelRef}
-			currentModel={conversationModel}
-			forceForegroundText={true}
-			useGlobalSelection={true}
-		/>
 	</div>
 
 	{#if isLoading}

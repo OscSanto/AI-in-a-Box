@@ -30,6 +30,7 @@ from SearchEngine.article_cache import ArticleCache, FaissLruLoader
 try:
     from libzim.reader import Archive as _ZimArchive
     from libzim.search import Query as _ZimQuery, Searcher as _ZimSearcher
+    from libzim.suggestion import SuggestionSearcher as _ZimSuggester
     _LIBZIM_OK = True
 except Exception:
     _LIBZIM_OK = False
@@ -48,6 +49,9 @@ _WEIGHT_CFG = _RETRIEVAL_CFG.get("weights", {})
 _RRF_WEIGHT_CFG = _RETRIEVAL_CFG.get("rrf_weights", {})
 
 _MIN_FAISS_SCORE         = float(_RETRIEVAL_CFG.get("min_faiss_score", 0.45))
+_SUGGESTION_BOOST        = float(_RETRIEVAL_CFG.get("suggestion_boost", 0.50))
+_FUSION_MAX_PER_ARTICLE  = int(  _RETRIEVAL_CFG.get("fusion_max_per_article", 3))
+_NAV_LEAD_BOOST          = float(_RETRIEVAL_CFG.get("nav_lead_boost", 1.15))
 _RERANKER                = str(_RETRIEVAL_CFG.get("reranker", "heuristic")).strip().lower()
 _INFOBOX_MIN_SCORE       = float(_RETRIEVAL_CFG.get("infobox_min_score", 0.80))
 _INFOBOX_MAX_PER_ARTICLE = int(_RETRIEVAL_CFG.get("infobox_max_per_article", 3))
@@ -206,7 +210,8 @@ class _ZimHandle:
         else:
             self.con = None
 
-        self.archive = None
+        self.archive   = None
+        self._suggester = None  # lazy SuggestionSearcher
         if _LIBZIM_OK:
             try:
                 self.archive = _ZimArchive(str(zim_path))
@@ -507,6 +512,32 @@ class _ZimHandle:
                 continue
         return chunks
 
+    def suggestion_article_ids(self, keyword: str, top_n: int = 3) -> set[int]:
+        """Return DB article_ids whose titles match keyword via libzim suggestion search."""
+        if not self.archive or not self.con or not _LIBZIM_OK:
+            return set()
+        try:
+            if self._suggester is None:
+                self._suggester = _ZimSuggester(self.archive)
+            sugg = self._suggester.suggest(keyword)
+            if sugg.getEstimatedMatches() == 0:
+                return set()
+            titles = []
+            for path in list(sugg.getResults(0, top_n)):
+                try:
+                    titles.append(self.archive.get_entry_by_path(path).title)
+                except Exception:
+                    pass
+            if not titles:
+                return set()
+            placeholders = ",".join("?" * len(titles))
+            rows = self.con.execute(
+                f"SELECT id FROM articles WHERE title IN ({placeholders})", titles
+            ).fetchall()
+            return {row[0] for row in rows}
+        except Exception:
+            return set()
+
 
 _handles: list[_ZimHandle] = []
 _handles_lock = threading.RLock()
@@ -789,6 +820,32 @@ def _structure_prior(chunk: dict) -> float:
     return max(0.0, min(1.0, score))
 
 
+def _mention_strength(query_text: str, chunk_text: str) -> float:
+    """
+    Multiplier [0.6, 1.0] penalising chunks where query terms appear only
+    incidentally — single occurrence and/or only in the latter half of text.
+    Chunks that contain the term early and repeatedly are not penalised.
+    Chunks that don't contain the term at all (FAISS-only hits) are not penalised.
+    """
+    terms = set(_TOK_RE.findall(query_text.lower()))
+    if not terms:
+        return 1.0
+    text_lower   = chunk_text.lower()
+    early_cutoff = max(1, len(text_lower) // 2)
+    multipliers  = []
+    for term in terms:
+        count = text_lower.count(term)
+        if count == 0:
+            continue  # not present — FAISS hit, no penalty
+        m = 1.0
+        if count == 1:
+            m *= 0.82
+        if term not in text_lower[:early_cutoff]:
+            m *= 0.88
+        multipliers.append(m)
+    return sum(multipliers) / len(multipliers) if multipliers else 1.0
+
+
 def _article_title_chunk_ids(con, article_scores: dict[int, float], per_article: int = _TITLE_ARTICLE_CHUNKS) -> list[int]:
     if not article_scores:
         return []
@@ -882,7 +939,7 @@ def _rerank(chunks: list[dict],
     for c in chunks:
         cid = c["chunk_id"]
         c["fusion_score"] = round(fused_scores.get(cid, 0.0), 5)
-        c["rerank_score"] = round(
+        base = (
             _W_FUSION    * n_fused.get(cid, 0.0)
             + _W_SEMANTIC  * n_sem.get(cid, 0.0)
             + _W_PARA_BM25 * n_par.get(cid, 0.0)
@@ -891,9 +948,10 @@ def _rerank(chunks: list[dict],
             + _W_ASPECT    * n_aspect.get(cid, 0.0)
             + _W_TITLE_TOK * n_title_tok.get(cid, 0.0)
             + _W_COVERAGE  * n_cov.get(cid, 0.0)
-            + _W_STRUCTURE * n_struct.get(cid, 0.0),
-            5,
+            + _W_STRUCTURE * n_struct.get(cid, 0.0)
         )
+        mention = _mention_strength(query_text, c.get("raw_text") or c.get("text", ""))
+        c["rerank_score"] = round(base * mention, 5)
 
     chunks.sort(key=lambda x: x["rerank_score"], reverse=True)
     return chunks
@@ -1021,7 +1079,8 @@ def search(query_text: str, top_k: int = 10,
     if query_vec is None:
         query_vec = _encode([query_text])[0]
 
-    bm25_query = extract_keywords(query_text)
+    bm25_query     = extract_keywords(query_text)
+    is_navigational = bm25_query != query_text.strip()
 
     all_prose:   list[dict] = []
     all_infobox: list[dict] = []
@@ -1080,7 +1139,22 @@ def search(query_text: str, top_k: int = 10,
         for rank, c in enumerate(fused_ranked, start=1):
             c["fusion_rank"] = rank
             c["fusion_score"] = round(fused_scores.get(c["chunk_id"], 0.0), 5)
-        chunks = fused_ranked[:max(top_k * _RERANK_POOL_MULTIPLIER, _RERANK_POOL_MIN)]
+        # Diversity cap: limit chunks per article so no single article
+        # monopolises the rerank pool before scoring has a chance to run.
+        _pool_target = max(top_k * _RERANK_POOL_MULTIPLIER, _RERANK_POOL_MIN)
+        _seen_art: dict[int, int] = {}
+        _diverse:  list[dict]    = []
+        _overflow: list[dict]    = []
+        for _c in fused_ranked:
+            _aid = _c["article_id"]
+            if _seen_art.get(_aid, 0) < _FUSION_MAX_PER_ARTICLE:
+                _seen_art[_aid] = _seen_art.get(_aid, 0) + 1
+                _diverse.append(_c)
+            else:
+                _overflow.append(_c)
+        chunks = _diverse[:_pool_target]
+        if len(chunks) < _pool_target:
+            chunks.extend(_overflow[:_pool_target - len(chunks)])
 
         # ── 4. Split prose / infobox ───────────────────────────────────────────
         prose   = [c for c in chunks if not c["section_title"].startswith("Infobox:")]
@@ -1094,6 +1168,26 @@ def search(query_text: str, top_k: int = 10,
         else:
             prose   = _rerank(prose,   rerank_query, faiss_scores, para_bm25, title_bm25, fused_scores)
             infobox = _rerank(infobox, rerank_query, faiss_scores, para_bm25, title_bm25, fused_scores)
+
+        # ── 5b. Navigational adjustments — "tell me about X" queries ──────────
+        # When extract_keywords stripped question framing, the user wants a
+        # specific article. Two boosts apply:
+        #   1. Suggestion boost — chunks from libzim title-matched articles rise
+        #   2. Lead section boost — overview sections preferred for entity queries
+        if is_navigational:
+            nav_ids = h.suggestion_article_ids(bm25_query)
+            needs_sort = False
+            if nav_ids:
+                for c in prose:
+                    if c["article_id"] in nav_ids:
+                        c["rerank_score"] = min(1.0, c["rerank_score"] + _SUGGESTION_BOOST)
+                needs_sort = True
+            for c in prose:
+                if (c.get("section_title") or "").lower() == "lead":
+                    c["rerank_score"] = min(1.0, c["rerank_score"] * _NAV_LEAD_BOOST)
+                    needs_sort = True
+            if needs_sort:
+                prose.sort(key=lambda c: c["rerank_score"], reverse=True)
 
         if debug:
             ranked_debug = sorted(

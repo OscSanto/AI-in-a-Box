@@ -82,6 +82,7 @@ def run_extract(zim_path: Path):
 
     con     = db.open_db(db_path)
     archive = Archive(str(zim_path))
+
     total   = archive.entry_count
     print(f"ZIM entries: {total:,}", flush=True)
 
@@ -136,6 +137,14 @@ def run_extract(zim_path: Path):
             continue
 
         if not parsed or not parsed["lead"]:
+            skipped += 1
+            continue
+
+        prose_chars  = len(parsed["lead"]) + sum(
+            len(p) for sec in parsed["sections"] for p in sec["paragraphs"]
+        )
+        infobox_rows = len(parsed["infobox"]["rows"]) if parsed.get("infobox") else 0
+        if prose_chars < 200 and infobox_rows < 3:
             skipped += 1
             continue
 

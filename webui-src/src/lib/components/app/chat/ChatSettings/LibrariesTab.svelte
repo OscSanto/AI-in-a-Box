@@ -65,7 +65,7 @@
 	}
 </script>
 
-<div class="space-y-4">
+<div class="min-w-0 overflow-x-hidden space-y-4">
 	<!-- Header -->
 	<div class="flex items-center justify-between gap-3 pb-2 border-b border-border/30">
 		<p class="min-w-0 flex-1 text-xs text-muted-foreground">
@@ -148,19 +148,19 @@
 					</div>
 
 					<!-- Stats grid -->
-					<div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
-						<div class="flex items-center gap-1.5 min-w-0">
+					<div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground overflow-hidden">
+						<div class="flex items-center gap-1.5 min-w-0 overflow-hidden">
 							<HardDrive class="h-3 w-3 flex-shrink-0" />
 							<span class="truncate">ZIM: <strong class="text-foreground">{formatMb(lib.zim_size_mb)}</strong></span>
 						</div>
 						{#if lib.is_indexed}
-							<div class="flex items-center gap-1.5 min-w-0">
+							<div class="flex items-center gap-1.5 min-w-0 overflow-hidden">
 								<Database class="h-3 w-3 flex-shrink-0" />
 								<span class="truncate">DB: <strong class="text-foreground">{formatMb(lib.db_size_mb)}</strong></span>
 							</div>
 							<div class="min-w-0 truncate">Vectors: <strong class="text-foreground">{formatCount(lib.vector_count)}</strong> / {formatCount(lib.max_vectors)}</div>
 							<div class="min-w-0 truncate">Chunks: <strong class="text-foreground">{formatCount(lib.chunk_count)}</strong></div>
-							<div class="col-span-2 min-w-0">Indexed: <strong class="text-foreground">{formatCount(lib.indexed_article_count)}</strong> / {formatCount(lib.max_articles)} articles</div>
+							<div class="col-span-2 min-w-0 truncate">Indexed: <strong class="text-foreground">{formatCount(lib.indexed_article_count)}</strong> / {formatCount(lib.max_articles)} articles</div>
 						{/if}
 						<div class="min-w-0 truncate">Total: <strong class="text-foreground">{formatCount(lib.archive_article_count)}</strong> articles</div>
 					</div>
