@@ -64,6 +64,17 @@ _ANSWER_FILTER_COVERAGE  = float(_RETRIEVAL_CFG.get("answer_filter_query_coverag
 _ARTICLE_SCORE_MARGIN    = float(_RETRIEVAL_CFG.get("article_score_margin", 0.20))
 _CROSS_ZIM_STRONG_SCORE  = float(_RETRIEVAL_CFG.get("cross_zim_strong_score", 0.80))
 _CROSS_ZIM_MARGIN        = float(_RETRIEVAL_CFG.get("cross_zim_margin", 0.05))
+_TITLE_ONLY_MIN_TITLE_OVERLAP = float(_RETRIEVAL_CFG.get("title_only_min_title_overlap", 0.35))
+_TITLE_ONLY_MIN_QUERY_COVERAGE = float(_RETRIEVAL_CFG.get("title_only_min_query_coverage", 0.20))
+_CROSS_ZIM_DOMINANCE_RERANK = float(_RETRIEVAL_CFG.get("cross_zim_dominance_rerank", 0.52))
+_CROSS_ZIM_TITLE_OVERLAP = float(_RETRIEVAL_CFG.get("cross_zim_title_overlap", 0.35))
+_CROSS_ZIM_KEEP_MARGIN = float(_RETRIEVAL_CFG.get("cross_zim_keep_margin", 0.08))
+_SEMANTIC_RERANK_TOP_N = int(_RETRIEVAL_CFG.get("semantic_rerank_top_n", 18))
+_SEMANTIC_RERANK_WEIGHT = float(_RETRIEVAL_CFG.get("semantic_rerank_weight", 0.30))
+_SEMANTIC_SUMMARY_CHARS = int(_RETRIEVAL_CFG.get("semantic_summary_chars", 220))
+_ARTICLE_SEMANTIC_RERANK_TOP_N = int(_RETRIEVAL_CFG.get("article_semantic_rerank_top_n", 12))
+_ARTICLE_SEMANTIC_RERANK_WEIGHT = float(_RETRIEVAL_CFG.get("article_semantic_rerank_weight", 0.45))
+_ARTICLE_SEMANTIC_BASE_WEIGHT = float(_RETRIEVAL_CFG.get("article_semantic_base_weight", 0.35))
 
 # RRF source weights. Set a source to 0.0 to remove it from RRF fusion.
 _RRF_W_SEMANTIC  = float(_RRF_WEIGHT_CFG.get("semantic", 1.0))
@@ -804,6 +815,138 @@ def _filter_weak_answer_chunks(chunks: list[dict], query_text: str) -> list[dict
     return filtered or chunks
 
 
+def _is_weak_title_only_chunk(query_text: str, chunk: dict) -> bool:
+    """Reject title-only expansion hits unless they look topically anchored."""
+    sources = set(chunk.get("candidate_sources", []))
+    if sources != {"title_bm25"}:
+        return False
+    if _title_token_overlap(query_text, chunk.get("title", "")) >= _TITLE_ONLY_MIN_TITLE_OVERLAP:
+        return False
+    if _query_coverage(query_text, chunk) >= _TITLE_ONLY_MIN_QUERY_COVERAGE:
+        return False
+    return True
+
+
+def _candidate_summary_text(chunk: dict) -> str:
+    """Compact semantic summary for lightweight query-time reranking."""
+    text = (chunk.get("raw_text") or chunk.get("text") or "").strip()
+    summary = text[:_SEMANTIC_SUMMARY_CHARS].strip()
+    if summary and len(text) > _SEMANTIC_SUMMARY_CHARS:
+        summary = summary.rsplit(" ", 1)[0].strip() + " ..."
+    parts = [
+        f"Title: {chunk.get('title', '').strip()}",
+        f"Section: {chunk.get('section_title', '').strip()}",
+    ]
+    if summary:
+        parts.append(f"Summary: {summary}")
+    return "\n".join(parts)
+
+
+def _article_summary_text(chunks: list[dict]) -> str:
+    """Build an article-level summary from the strongest available chunk."""
+    if not chunks:
+        return ""
+    lead_chunk = next((c for c in chunks if (c.get("section_title") or "").lower() == "lead"), None)
+    best_chunk = lead_chunk or max(chunks, key=lambda c: c.get("rerank_score", 0.0))
+    return _candidate_summary_text(best_chunk)
+
+
+def _semantic_rerank_articles(chunks: list[dict], query_vec: np.ndarray) -> list[dict]:
+    """
+    Query-time article rerank using article summaries.
+    Embeddings are ephemeral and are not persisted to any index.
+    """
+    if len(chunks) <= 1 or _ARTICLE_SEMANTIC_RERANK_TOP_N <= 0 or _ARTICLE_SEMANTIC_RERANK_WEIGHT <= 0.0:
+        return chunks
+
+    article_map: dict[tuple[str, int], list[dict]] = {}
+    for chunk in chunks:
+        key = (chunk.get("zim_name", ""), int(chunk.get("article_id", 0)))
+        article_map.setdefault(key, []).append(chunk)
+
+    ranked_articles = sorted(
+        article_map.items(),
+        key=lambda item: max(c.get("rerank_score", 0.0) for c in item[1]),
+        reverse=True,
+    )
+    head_articles = ranked_articles[:_ARTICLE_SEMANTIC_RERANK_TOP_N]
+    article_texts = [_article_summary_text(article_chunks) for _, article_chunks in head_articles]
+
+    try:
+        article_vecs = _encode(article_texts)
+    except Exception as e:
+        print(f"[zim_retrieval] article semantic rerank skipped: {e}", flush=True)
+        return chunks
+
+    sims = np.dot(article_vecs, query_vec.astype(np.float32))
+    sim_map: dict[tuple[str, int], float] = {
+        key: float(score) for (key, _), score in zip(head_articles, sims, strict=False)
+    }
+    n_sim = _minmax(sim_map)
+    base_map = {
+        key: max(c.get("rerank_score", 0.0) for c in article_chunks)
+        for key, article_chunks in head_articles
+    }
+    n_base = _minmax(base_map)
+
+    article_score: dict[tuple[str, int], float] = {}
+    for key, _article_chunks in head_articles:
+        article_score[key] = (
+            _ARTICLE_SEMANTIC_BASE_WEIGHT * n_base.get(key, 0.0)
+            + (1.0 - _ARTICLE_SEMANTIC_BASE_WEIGHT) * n_sim.get(key, 0.0)
+        )
+
+    for chunk in chunks:
+        key = (chunk.get("zim_name", ""), int(chunk.get("article_id", 0)))
+        if key not in article_score:
+            continue
+        chunk["article_semantic_score"] = round(sim_map.get(key, 0.0), 5)
+        chunk["rerank_score"] = round(
+            (1.0 - _ARTICLE_SEMANTIC_RERANK_WEIGHT) * chunk.get("rerank_score", 0.0)
+            + _ARTICLE_SEMANTIC_RERANK_WEIGHT * article_score[key],
+            5,
+        )
+
+    chunks.sort(key=lambda c: c.get("rerank_score", 0.0), reverse=True)
+    return chunks
+
+
+def _semantic_rerank_candidates(chunks: list[dict], query_vec: np.ndarray) -> list[dict]:
+    """
+    Query-time semantic rerank over a small prose pool using title + section + snippet.
+    Embeddings are ephemeral and are not persisted to any index.
+    """
+    if len(chunks) <= 1 or _SEMANTIC_RERANK_TOP_N <= 0 or _SEMANTIC_RERANK_WEIGHT <= 0.0:
+        return chunks
+
+    limit = min(len(chunks), _SEMANTIC_RERANK_TOP_N)
+    head = list(chunks[:limit])
+    tail = list(chunks[limit:])
+    summaries = [_candidate_summary_text(c) for c in head]
+
+    try:
+        cand_vecs = _encode(summaries)
+    except Exception as e:
+        print(f"[zim_retrieval] semantic rerank skipped: {e}", flush=True)
+        return chunks
+
+    sims = np.dot(cand_vecs, query_vec.astype(np.float32))
+    sim_map = {c["chunk_id"]: float(score) for c, score in zip(head, sims, strict=False)}
+    n_sim = _minmax(sim_map)
+
+    for c in head:
+        cid = c["chunk_id"]
+        c["semantic_summary_score"] = round(sim_map.get(cid, 0.0), 5)
+        c["rerank_score"] = round(
+            (1.0 - _SEMANTIC_RERANK_WEIGHT) * c.get("rerank_score", 0.0)
+            + _SEMANTIC_RERANK_WEIGHT * n_sim.get(cid, 0.0),
+            5,
+        )
+
+    head.sort(key=lambda c: c.get("rerank_score", 0.0), reverse=True)
+    return head + tail
+
+
 def _structure_prior(chunk: dict) -> float:
     section = (chunk.get("section_title") or "").lower()
     idx     = int(chunk.get("chunk_index", 0))
@@ -1240,6 +1383,7 @@ def search(query_text: str, top_k: int = 10,
 
         if answer_filter:
             prose = _filter_weak_answer_chunks(prose, bm25_query or query_text)
+        prose = [c for c in prose if not _is_weak_title_only_chunk(query_text, c)]
 
         # Infobox: apply semantic/BM25 evidence + per-article cap. BM25 can be
         # the strongest signal for terse facts such as dates, names, and places.
@@ -1271,14 +1415,43 @@ def search(query_text: str, top_k: int = 10,
 
     # ── 7. Cross-ZIM false-positive filter (prose only) ────────────────────────
     if all_prose:
-        prose_top = all_prose[0]["faiss_score"]
-        if prose_top >= _CROSS_ZIM_STRONG_SCORE:
-            top_zim   = all_prose[0]["zim_name"]
-            threshold = prose_top - _CROSS_ZIM_MARGIN
-            all_prose   = [c for c in all_prose
-                           if c["zim_name"] == top_zim or c["faiss_score"] >= threshold]
-            all_infobox = [c for c in all_infobox
-                           if c["zim_name"] == top_zim or c["faiss_score"] >= threshold]
+        top_chunk = all_prose[0]
+        prose_top = top_chunk["faiss_score"]
+        top_rerank = top_chunk.get("rerank_score", 0.0)
+        top_title_overlap = _title_token_overlap(query_text, top_chunk.get("title", ""))
+        dominant_title_hit = (
+            top_rerank >= _CROSS_ZIM_DOMINANCE_RERANK
+            and top_title_overlap >= _CROSS_ZIM_TITLE_OVERLAP
+        )
+        if prose_top >= _CROSS_ZIM_STRONG_SCORE or dominant_title_hit:
+            top_zim = top_chunk["zim_name"]
+            faiss_threshold = prose_top - _CROSS_ZIM_MARGIN
+            rerank_threshold = top_rerank - _CROSS_ZIM_KEEP_MARGIN
+
+            def _keep_cross_zim_chunk(c: dict) -> bool:
+                if c["zim_name"] == top_zim:
+                    return True
+                if c.get("faiss_score", 0.0) >= faiss_threshold:
+                    return True
+                if dominant_title_hit:
+                    title_overlap = _title_token_overlap(query_text, c.get("title", ""))
+                    coverage = _query_coverage(query_text, c)
+                    if (
+                        c.get("rerank_score", 0.0) >= rerank_threshold
+                        and (
+                            title_overlap >= _CROSS_ZIM_TITLE_OVERLAP
+                            or coverage >= _TITLE_ONLY_MIN_QUERY_COVERAGE
+                        )
+                    ):
+                        return True
+                return False
+
+            all_prose = [c for c in all_prose if _keep_cross_zim_chunk(c)]
+            all_infobox = [c for c in all_infobox if _keep_cross_zim_chunk(c)]
+
+    if all_prose:
+        all_prose = _semantic_rerank_articles(all_prose, query_vec)
+        all_prose = _semantic_rerank_candidates(all_prose, query_vec)
 
     # ── 8. Truncate long prose chunks ──────────────────────────────────────────
     for c in all_prose:
