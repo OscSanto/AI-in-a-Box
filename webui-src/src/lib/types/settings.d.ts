@@ -26,6 +26,8 @@ export interface SettingsChatServiceOptions {
 	zim?: string;
 	bypass_cache?: boolean;
 	log_level?: string;
+	fork?: boolean;
+	conv_id?: string;
 	// System message to inject
 	systemMessage?: string;
 	// Disable reasoning parsing (use 'none' instead of 'auto')

@@ -28,5 +28,10 @@ except Exception:
 export OLLAMA_FLASH_ATTENTION="$FLASH_ATTN"
 [ "$FLASH_ATTN" = "1" ] && echo "Flash Attention: enabled" || echo "Flash Attention: disabled"
 
+# Use a persistent fastembed cache so the embed model survives reboots.
+# /tmp/fastembed_cache (the library default) is wiped on every boot.
+export FASTEMBED_CACHE_PATH="${FASTEMBED_CACHE_PATH:-${HOME}/.cache/fastembed}"
+echo "Embed model cache: $FASTEMBED_CACHE_PATH"
+
 echo "Starting WebUI + RAG on http://$HOST:$PORT"
 exec uvicorn main:app --host "$HOST" --port "$PORT"

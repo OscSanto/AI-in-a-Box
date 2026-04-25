@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Edit, Copy, RefreshCw, Trash2, ArrowRight } from '@lucide/svelte';
+	import { Edit, Copy, RefreshCw, Trash2, ArrowRight, GitFork } from '@lucide/svelte';
 	import {
 		ActionIcon,
 		ChatMessageBranchingControls,
@@ -24,6 +24,8 @@
 		onEdit?: () => void;
 		onRegenerate?: () => void;
 		onContinue?: () => void;
+		onFork?: () => void;
+		forkActive?: boolean;
 		onDelete: () => void;
 		onConfirmDelete: () => void;
 		onNavigateToSibling?: (siblingId: string) => void;
@@ -41,6 +43,8 @@
 		onEdit,
 		onConfirmDelete,
 		onContinue,
+		onFork,
+		forkActive = false,
 		onDelete,
 		onNavigateToSibling,
 		onShowDeleteDialogChange,
@@ -84,6 +88,15 @@
 
 			{#if role === MessageRole.ASSISTANT && onContinue}
 				<ActionIcon icon={ArrowRight} tooltip="Continue" onclick={onContinue} />
+			{/if}
+
+			{#if role === MessageRole.ASSISTANT && onFork}
+				<ActionIcon
+					icon={GitFork}
+					tooltip={forkActive ? 'Extended conversation on (click to disable)' : 'Extend conversation'}
+					onclick={onFork}
+					class={forkActive ? 'text-primary' : ''}
+				/>
 			{/if}
 
 			<ActionIcon icon={Trash2} tooltip="Delete" onclick={onDelete} />

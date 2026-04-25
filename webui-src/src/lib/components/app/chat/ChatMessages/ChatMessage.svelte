@@ -13,6 +13,7 @@
 		ChatMessageSystem
 	} from '$lib/components/app/chat';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
+	import { setForkActive, ragControls } from '$lib/stores/ragControls.svelte';
 
 	interface Props {
 		class?: string;
@@ -164,6 +165,10 @@
 		chatActions.continueAssistantMessage(message);
 	}
 
+	function handleFork() {
+		setForkActive(!ragControls().forkActive);
+	}
+
 	function handleNavigateToSibling(siblingId: string) {
 		chatActions.navigateToSibling(siblingId);
 	}
@@ -269,6 +274,7 @@
 		messageContent={message.content}
 		onConfirmDelete={handleConfirmDelete}
 		onContinue={handleContinue}
+		onFork={handleFork}
 		onCopy={handleCopy}
 		onDelete={handleDelete}
 		onEdit={handleEdit}

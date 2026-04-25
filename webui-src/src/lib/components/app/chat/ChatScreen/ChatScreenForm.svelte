@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { afterNavigate } from '$app/navigation';
 	import { ChatFormHelperText, ChatForm } from '$lib/components/app';
-	import { parseRagCommand } from '$lib/stores/ragControls.svelte';
+	import { parseRagCommand, ragControls, resetForkActive } from '$lib/stores/ragControls.svelte';
+	import { GitFork, X } from '@lucide/svelte';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -50,6 +51,7 @@
 	}
 
 	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
+	let isForkActive = $derived(ragControls().forkActive);
 
 	async function handleSubmit() {
 		if (
@@ -115,6 +117,19 @@
 </script>
 
 <div class="relative mx-auto max-w-[48rem]">
+	{#if isForkActive}
+		<div class="mb-1 flex items-center gap-1.5 px-1">
+			<GitFork class="h-3 w-3 text-primary" />
+			<span class="text-xs text-primary">Extended conversation</span>
+			<button
+				class="ml-auto flex h-4 w-4 items-center justify-center rounded hover:bg-muted"
+				onclick={resetForkActive}
+				aria-label="Disable extended conversation"
+			>
+				<X class="h-3 w-3 text-muted-foreground" />
+			</button>
+		</div>
+	{/if}
 	<ChatForm
 		bind:this={chatFormRef}
 		bind:value={message}

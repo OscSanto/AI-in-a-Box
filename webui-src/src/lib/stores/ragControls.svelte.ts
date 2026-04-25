@@ -35,6 +35,7 @@ export interface RagControlsState {
 	bypassCache: boolean;
 	logLevel: RagLogLevel;
 	thinking: boolean;
+	forkActive: boolean;
 }
 
 const DEFAULT_STATE: RagControlsState = {
@@ -42,7 +43,8 @@ const DEFAULT_STATE: RagControlsState = {
 	selectedZim: 'all',
 	bypassCache: false,
 	logLevel: 'full',
-	thinking: false
+	thinking: false,
+	forkActive: false
 };
 
 let _state = $state<RagControlsState>({ ...DEFAULT_STATE });
@@ -78,6 +80,7 @@ export function resetRagControls(): void {
 }
 
 
+
 export function resetRagMode(): void {
 	setRagMode(DEFAULT_STATE.mode);
 }
@@ -104,6 +107,14 @@ export function toggleThinking(): void {
 
 export function resetThinking(): void {
 	setThinking(false);
+}
+
+export function setForkActive(active: boolean): void {
+	_state = { ..._state, forkActive: active };
+}
+
+export function resetForkActive(): void {
+	setForkActive(false);
 }
 
 function parseLeadingCommand(input: string): {

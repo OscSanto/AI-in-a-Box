@@ -22,6 +22,7 @@
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { ragControls } from '$lib/stores/ragControls.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { ServerModelStatus } from '$lib/enums';
 	import { REASONING_TAGS } from '$lib/constants/agentic';
@@ -40,6 +41,7 @@
 		onCopy: () => void;
 		onConfirmDelete: () => void;
 		onContinue?: () => void;
+		onFork?: () => void;
 		onDelete: () => void;
 		onEdit?: () => void;
 		onNavigateToSibling?: (siblingId: string) => void;
@@ -110,6 +112,7 @@
 		messageContent,
 		onConfirmDelete,
 		onContinue,
+		onFork,
 		onCopy,
 		onDelete,
 		onEdit,
@@ -123,6 +126,7 @@
 
 	// Get edit context
 	const editCtx = getMessageEditContext();
+	let isForkActive = $derived(ragControls().forkActive);
 
 	// Local state for assistant-specific editing
 	let shouldBranchAfterEdit = $state(false);
@@ -445,6 +449,8 @@
 			onContinue={currentConfig.enableContinueGeneration && !hasReasoningMarkers
 				? onContinue
 				: undefined}
+			{onFork}
+			forkActive={isForkActive}
 			{onDelete}
 			{onConfirmDelete}
 			{onNavigateToSibling}

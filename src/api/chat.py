@@ -31,6 +31,61 @@ import asyncio
 
 router = APIRouter()
 
+# ── Short fork-memory helpers ────────────────────────────────────────────────
+# The WebUI persists conversation trees in browser IndexedDB and sends the
+# active branch path with every request. Build short-memory directly from that
+# path so it survives server restarts and always matches the visible branch.
+
+_HISTORY_MAX_TURNS = 3
+
+
+def _message_text(content) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text" and item.get("text"):
+                parts.append(str(item["text"]))
+        return "\n".join(parts).strip()
+    return ""
+
+
+def _fork_history_pairs(messages: list, enabled: bool) -> list[dict]:
+    """Build last-N user/assistant turns from the submitted conversation path."""
+    if not enabled:
+        return []
+    turns: list[tuple[str, str]] = []
+    current_query = ""
+    current_answer_parts: list[str] = []
+
+    for msg in messages:
+        role = msg.get("role")
+        text = _message_text(msg.get("content"))
+        if role == "system":
+            continue
+        if role == "user":
+            if current_query and current_answer_parts:
+                turns.append((current_query, "\n".join(current_answer_parts).strip()))
+            current_query = text
+            current_answer_parts = []
+            continue
+        if role == "assistant" and current_query:
+            if text:
+                current_answer_parts.append(text)
+
+    if current_query and current_answer_parts:
+        turns.append((current_query, "\n".join(current_answer_parts).strip()))
+
+    pairs: list[dict] = []
+    for prior_query, prior_answer in turns[-_HISTORY_MAX_TURNS:]:
+        if prior_query:
+            pairs.append({"role": "user", "content": prior_query})
+        if prior_answer:
+            pairs.append({"role": "assistant", "content": prior_answer})
+    return pairs
+
+
 KIWIX_VIEWER_BASE = __import__("os").environ.get("KIWIX_VIEWER_BASE", "http://127.0.0.1/kiwix/viewer").rstrip("/")
 
 _LINE_SPLIT_RE = re.compile(r"\n{2,}")
@@ -270,6 +325,26 @@ def _log_candidate_pools(pools: list[dict]) -> None:
             print(f"       raw_preview={_preview(h.get('text', ''), 420)!r}", flush=True)
 
 
+def _print_llm_verbose(t: dict) -> None:
+    """Print per-query LLM timing to terminal in ollama --verbose style."""
+    def _ms(s):  return f"{s * 1000:.2f}ms" if s is not None and s < 1 else (f"{s:.3f}s" if s is not None else "—")
+    def _toks(n): return f"{n} token(s)" if n is not None else "—"
+    def _rate(r):  return f"{r:.2f} tokens/s" if r is not None else "—"
+    cold = " (cold load)" if t.get("was_cold") else ""
+    limit = " ⚠ hit token limit" if t.get("hit_token_limit") else ""
+    print(
+        f"\n[llm] total duration:        {_ms(t.get('total_s'))}{cold}\n"
+        f"[llm] load duration:         {_ms(t.get('load_s'))}\n"
+        f"[llm] prompt eval count:     {_toks(t.get('prompt_tokens'))}\n"
+        f"[llm] prompt eval duration:  {_ms(t.get('prefill_s'))}\n"
+        f"[llm] prompt eval rate:      {_rate(t.get('prefill_tok_s'))}\n"
+        f"[llm] eval count:            {_toks(t.get('gen_tokens'))}{limit}\n"
+        f"[llm] eval duration:         {_ms(t.get('gen_s'))}\n"
+        f"[llm] eval rate:             {_rate(t.get('gen_tok_s'))}\n",
+        flush=True,
+    )
+
+
 async def _wake_ollama(model: str, backend_url: str = "http://localhost:11434") -> None:
     """Fire-and-forget model warmup; generation still works if this fails."""
     try:
@@ -319,6 +394,8 @@ async def chat_completions(request: Request):
             status_code=400,
         )
     bypass_cache = bool(body.get("bypass_cache", False))
+    conv_id  = str(body.get("conv_id") or "").strip()
+    fork     = bool(body.get("fork", False)) and bool(conv_id)
     think = body.get("think", None)
     log_level = str(body.get("log_level", "full")).lower()
     if log_level not in ("off", "summary", "full"):
@@ -400,6 +477,8 @@ async def chat_completions(request: Request):
             if summary_logs:
                 print(f"[webui-rag] 1_chat_llm_start | total={t_context - t0:.3f}s | model={_llm_model}", flush=True)
             full_answer = ""
+            _chat_timings: dict = {}
+            _history_pairs = _fork_history_pairs(messages, fork)
             _chat_client = ollama.Client(host=_backend_url, timeout=OLLAMA_TIMEOUT)
             _chat_kwargs: dict = dict(
                 model=_llm_model,
@@ -407,6 +486,7 @@ async def chat_completions(request: Request):
                 keep_alive=_llm_options.get("keep_alive", "15m"),
                 messages=[
                     {"role": "system", "content": _system_prompt},
+                    *_history_pairs,
                     {"role": "user", "content": query},
                 ],
                 stream=True,
@@ -420,6 +500,12 @@ async def chat_completions(request: Request):
                     if thinking:
                         yield _sse_thinking(chat_id, created, thinking)
                     token = chunk["message"]["content"]
+                    if chunk.get("done", False):
+                        try:
+                            _chat_timings = _llm_extract_timings(chunk, _llm_model)
+                            llm_metrics.record("answer", _llm_model, _chat_timings)
+                        except Exception:
+                            pass
                     if token:
                         full_answer += token
                         yield _sse(chat_id, created, token)
@@ -442,6 +528,8 @@ async def chat_completions(request: Request):
                     f"total={t_done - t0:.3f}s | answer_chars={len(full_answer)}",
                     flush=True,
                 )
+            if summary_logs and _chat_timings:
+                _print_llm_verbose(_chat_timings)
             if full_logs:
                 print("[webui-rag] --- answer ---", flush=True)
                 print(full_answer, flush=True)
@@ -527,8 +615,10 @@ async def chat_completions(request: Request):
             )
 
         full_answer = ""
+        _history_pairs = _fork_history_pairs(messages, fork)
         llm_messages = [
             {"role": "system", "content": _system_prompt},
+            *_history_pairs,
             {"role": "user",   "content": f"Context:\n{context}\n\nQuestion: {query}"},
         ]
         _rag_client = ollama.Client(host=_backend_url, timeout=OLLAMA_TIMEOUT)
@@ -541,6 +631,7 @@ async def chat_completions(request: Request):
         )
         if think is not None:
             _rag_chat_kwargs["think"] = bool(think)
+        _last_timings: dict = {}
         try:
             stream = _rag_client.chat(**_rag_chat_kwargs)
             for chunk in stream:
@@ -550,7 +641,8 @@ async def chat_completions(request: Request):
                 token = chunk["message"]["content"]
                 if chunk.get("done", False):
                     try:
-                        llm_metrics.record("answer", _llm_model, _llm_extract_timings(chunk, _llm_model))
+                        _last_timings = _llm_extract_timings(chunk, _llm_model)
+                        llm_metrics.record("answer", _llm_model, _last_timings)
                     except Exception:
                         pass
                 if token:
@@ -578,6 +670,8 @@ async def chat_completions(request: Request):
                 f"total={t_done - t0:.3f}s | answer_chars={len(full_answer)}",
                 flush=True,
             )
+        if summary_logs and _last_timings:
+            _print_llm_verbose(_last_timings)
         if full_logs:
             print("[webui-rag] --- answer ---", flush=True)
             print(full_answer, flush=True)

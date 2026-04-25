@@ -13,11 +13,11 @@
 
 import { SvelteMap } from 'svelte/reactivity';
 import { DatabaseService, ChatService } from '$lib/services';
-import { conversationsStore } from '$lib/stores/conversations.svelte';
+import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { setArticles } from '$lib/stores/articlesStore.svelte';
 import { pipelineMode } from '$lib/stores/pipelineMode.svelte';
-import { ragControls } from '$lib/stores/ragControls.svelte';
+import { ragControls, resetForkActive } from '$lib/stores/ragControls.svelte';
 import { samplingOverridesStore } from '$lib/stores/samplingOverrides.svelte';
 import { inferenceBackendsStore } from '$lib/stores/inferenceBackends.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
@@ -1485,7 +1485,9 @@ class ChatStore {
 			zim: rag.selectedZim,
 			bypass_cache: rag.bypassCache,
 			log_level: rag.logLevel,
-			think: rag.thinking
+			think: rag.thinking,
+			fork: rag.forkActive,
+			conv_id: activeConversation()?.id ?? ''
 		};
 
 		if (isRouterMode()) {

@@ -109,7 +109,9 @@ export class ChatService {
 			disableReasoningParsing,
 			zim,
 			bypass_cache,
-			log_level
+			log_level,
+			fork,
+			conv_id
 		} = options;
 
 		const normalizedMessages: ApiChatMessageData[] = messages
@@ -182,6 +184,8 @@ export class ChatService {
 		if (zim) (requestBody as Record<string, unknown>).zim = zim;
 		if (bypass_cache !== undefined) (requestBody as Record<string, unknown>).bypass_cache = bypass_cache;
 		if (log_level) (requestBody as Record<string, unknown>).log_level = log_level;
+		if (fork) (requestBody as Record<string, unknown>).fork = true;
+		if (conv_id) (requestBody as Record<string, unknown>).conv_id = conv_id;
 
 		// User sampling overrides — merged server-side over mode YAML (Ollama-supported keys only)
 		const userLlmOptions = (options as SettingsChatServiceOptions).user_llm_options;

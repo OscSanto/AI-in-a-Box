@@ -5,16 +5,37 @@ No HTTP roundtrip, no keep_alive, not evicted by LLM calls.
 ONNX Runtime is not safe for concurrent inference on the same model instance,
 so all calls are serialized through _embed_lock.
 """
+import os
 import time
 import threading
+from pathlib import Path
 
 import numpy as np
 from fastembed import TextEmbedding as _FE
 
 from SearchEngine.config import EMBED_HF_MODEL
 
-print(f"⏳ Loading embed model {EMBED_HF_MODEL!r} ...", flush=True)
-_fe_model = _FE(EMBED_HF_MODEL, threads=4)  # use all 4 Pi cores for ONNX inference
+# Persistent cache — fastembed defaults to /tmp which is wiped on reboot.
+# start.sh exports FASTEMBED_CACHE_PATH; fall back to ~/.cache/fastembed here
+# so direct `python main.py` invocations also benefit.
+_FASTEMBED_CACHE = os.environ.get(
+    "FASTEMBED_CACHE_PATH",
+    str(Path.home() / ".cache" / "fastembed"),
+)
+os.environ.setdefault("FASTEMBED_CACHE_PATH", _FASTEMBED_CACHE)
+
+# Check whether the model is already cached (skip-download path)
+_model_slug = "models--" + EMBED_HF_MODEL.lower().replace("/", "--")
+_model_cache_dir = Path(_FASTEMBED_CACHE) / _model_slug
+_is_cached = _model_cache_dir.exists() and any(_model_cache_dir.rglob("*.onnx"))
+
+if _is_cached:
+    print(f"✅ Embed model cached — loading from {_model_cache_dir}", flush=True)
+else:
+    print(f"⬇️  Embed model not found in cache, downloading {EMBED_HF_MODEL!r} ...", flush=True)
+    print(f"   Cache: {_FASTEMBED_CACHE}", flush=True)
+
+_fe_model = _FE(EMBED_HF_MODEL, cache_dir=_FASTEMBED_CACHE, threads=4)
 list(_fe_model.embed(["warmup"]))   # warm ONNX runtime before first real request
 print("✅ Embed model ready", flush=True)
 

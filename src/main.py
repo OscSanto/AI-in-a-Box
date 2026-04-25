@@ -81,7 +81,8 @@ def index():
 def health():
     return {"status": "ok"}
 
-
+# Note: the client needs to know the available ZIMs and some config options at runtime, so we expose a simple endpoint for that.
+# 
 @app.get("/config")
 def client_config():
     """Runtime config for the WebUI (mode, ZIM list)."""
