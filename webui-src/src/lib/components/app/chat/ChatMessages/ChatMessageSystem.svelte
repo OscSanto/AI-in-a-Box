@@ -1,11 +1,12 @@
 <script lang="ts">
-	import { Check, X } from '@lucide/svelte';
+	import { Check, RotateCcw, X } from '@lucide/svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { MarkdownContent } from '$lib/components/app';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { INPUT_CLASSES } from '$lib/constants/css-classes';
 	import { config } from '$lib/stores/settings.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
 	import { isIMEComposing } from '$lib/utils';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 	import { KeyboardKey, MessageRole } from '$lib/enums';
@@ -68,6 +69,7 @@
 	const currentConfig = config();
 
 	let showExpandButton = $derived(contentHeight > MAX_HEIGHT);
+	let isRevertingToDefault = $state(false);
 
 	$effect(() => {
 		if (!messageElement || !message.content.trim()) return;
@@ -96,6 +98,16 @@
 	function toggleExpand() {
 		isExpanded = !isExpanded;
 	}
+
+	async function handleRevertToModePrompt() {
+		isRevertingToDefault = true;
+		try {
+			const prompt = await chatStore.getCurrentModeSystemPrompt();
+			editCtx.setContent(prompt);
+		} finally {
+			isRevertingToDefault = false;
+		}
+	}
 </script>
 
 <div
@@ -115,6 +127,18 @@
 			></textarea>
 
 			<div class="mt-2 flex justify-end gap-2">
+				<Button
+					class="h-8 px-3"
+					onclick={handleRevertToModePrompt}
+					disabled={isRevertingToDefault}
+					size="sm"
+					variant="outline"
+				>
+					<RotateCcw class="mr-1 h-3 w-3" />
+
+					Revert to Mode Prompt
+				</Button>
+
 				<Button class="h-8 px-3" onclick={editCtx.cancel} size="sm" variant="outline">
 					<X class="mr-1 h-3 w-3" />
 
@@ -124,7 +148,6 @@
 				<Button
 					class="h-8 px-3"
 					onclick={editCtx.save}
-					disabled={!editCtx.editedContent.trim()}
 					size="sm"
 				>
 					<Check class="mr-1 h-3 w-3" />
@@ -134,28 +157,28 @@
 			</div>
 		</div>
 	{:else}
-		{#if message.content.trim()}
-			<div class="relative max-w-[80%]">
-				<button
-					class="group/expand w-full text-left {!isExpanded && showExpandButton
-						? 'cursor-pointer'
-						: 'cursor-auto'}"
-					onclick={showExpandButton && !isExpanded ? toggleExpand : undefined}
-					type="button"
+		<div class="relative max-w-[80%]">
+			<button
+				class="group/expand w-full text-left {!isExpanded && showExpandButton
+					? 'cursor-pointer'
+					: 'cursor-auto'}"
+				onclick={showExpandButton && !isExpanded ? toggleExpand : undefined}
+				type="button"
+			>
+				<Card
+					class="overflow-y-auto rounded-[1.125rem] !border-2 !border-dashed !border-border/50 bg-muted px-3.75 py-1.5 data-[multiline]:py-2.5"
+					data-multiline={isMultiline ? '' : undefined}
+					style="border: 2px dashed hsl(var(--border)); max-height: var(--max-message-height);"
 				>
-					<Card
-						class="overflow-y-auto rounded-[1.125rem] !border-2 !border-dashed !border-border/50 bg-muted px-3.75 py-1.5 data-[multiline]:py-2.5"
-						data-multiline={isMultiline ? '' : undefined}
-						style="border: 2px dashed hsl(var(--border)); max-height: var(--max-message-height);"
+					<div
+						class="relative transition-all duration-300 {isExpanded
+							? 'cursor-text select-text'
+							: 'select-none'}"
+						style={!isExpanded && showExpandButton
+							? `max-height: ${MAX_HEIGHT}px;`
+							: 'max-height: none;'}
 					>
-						<div
-							class="relative transition-all duration-300 {isExpanded
-								? 'cursor-text select-text'
-								: 'select-none'}"
-							style={!isExpanded && showExpandButton
-								? `max-height: ${MAX_HEIGHT}px;`
-								: 'max-height: none;'}
-						>
+						{#if message.content.trim()}
 							{#if currentConfig.renderUserContentAsMarkdown}
 								<div bind:this={messageElement} class="text-md {isExpanded ? 'cursor-text' : ''}">
 									<MarkdownContent
@@ -171,45 +194,52 @@
 									{message.content}
 								</span>
 							{/if}
+						{:else}
+							<div
+								bind:this={messageElement}
+								class="text-md italic text-muted-foreground"
+							>
+								No system prompt. The backend default prompt is disabled for this conversation.
+							</div>
+						{/if}
 
-							{#if !isExpanded && showExpandButton}
-								<div
-									class="pointer-events-none absolute right-0 bottom-0 left-0 h-48 bg-gradient-to-t from-muted to-transparent"
-								></div>
+						{#if !isExpanded && showExpandButton}
+							<div
+								class="pointer-events-none absolute right-0 bottom-0 left-0 h-48 bg-gradient-to-t from-muted to-transparent"
+							></div>
 
-								<div
-									class="pointer-events-none absolute right-0 bottom-4 left-0 flex justify-center opacity-0 transition-opacity group-hover/expand:opacity-100"
-								>
-									<Button
-										class="rounded-full px-4 py-1.5 text-xs shadow-md"
-										size="sm"
-										variant="outline"
-									>
-										Show full system message
-									</Button>
-								</div>
-							{/if}
-						</div>
-
-						{#if isExpanded && showExpandButton}
-							<div class="mb-2 flex justify-center">
+							<div
+								class="pointer-events-none absolute right-0 bottom-4 left-0 flex justify-center opacity-0 transition-opacity group-hover/expand:opacity-100"
+							>
 								<Button
-									class="rounded-full px-4 py-1.5 text-xs"
-									onclick={(e) => {
-										e.stopPropagation();
-										toggleExpand();
-									}}
+									class="rounded-full px-4 py-1.5 text-xs shadow-md"
 									size="sm"
 									variant="outline"
 								>
-									Collapse System Message
+									Show full system message
 								</Button>
 							</div>
 						{/if}
-					</Card>
-				</button>
-			</div>
-		{/if}
+					</div>
+
+					{#if isExpanded && showExpandButton}
+						<div class="mb-2 flex justify-center">
+							<Button
+								class="rounded-full px-4 py-1.5 text-xs"
+								onclick={(e) => {
+									e.stopPropagation();
+									toggleExpand();
+								}}
+								size="sm"
+								variant="outline"
+							>
+								Collapse System Message
+							</Button>
+						</div>
+					{/if}
+				</Card>
+			</button>
+		</div>
 
 		{#if message.timestamp}
 			<div class="max-w-[80%]">

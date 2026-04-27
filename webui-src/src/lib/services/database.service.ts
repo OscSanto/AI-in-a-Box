@@ -131,10 +131,9 @@ export class DatabaseService {
 	 * Creates a system prompt message for a conversation.
 	 *
 	 * @param convId - Conversation ID
-	 * @param systemPrompt - The system prompt content (must be non-empty)
+	 * @param systemPrompt - The system prompt content. Empty means explicit "no system prompt".
 	 * @param parentId - Parent message ID (typically the root message)
 	 * @returns The created system message
-	 * @throws Error if systemPrompt is empty
 	 */
 	static async createSystemMessage(
 		convId: string,
@@ -142,9 +141,6 @@ export class DatabaseService {
 		parentId: string
 	): Promise<DatabaseMessage> {
 		const trimmedPrompt = systemPrompt.trim();
-		if (!trimmedPrompt) {
-			throw new Error('Cannot create system message with empty content');
-		}
 
 		const systemMessage: DatabaseMessage = {
 			id: uuid(),

@@ -123,16 +123,6 @@ export class ChatService {
 				} else {
 					return msg as ApiChatMessageData;
 				}
-			})
-			.filter((msg) => {
-				// Filter out empty system messages
-				if (msg.role === MessageRole.SYSTEM) {
-					const content = typeof msg.content === 'string' ? msg.content : '';
-
-					return content.trim().length > 0;
-				}
-
-				return true;
 			});
 
 		// Filter out image attachments if the model doesn't support vision

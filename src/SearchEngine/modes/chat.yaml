@@ -1,0 +1,13 @@
+# Direct chat mode — no retrieval, no semantic cache, minimal defaults.
+
+retrieval: {}
+
+# llm_model: inherit from _active_model (set via UI or config.yaml ai_mode.llm_model)
+# No llm_options — Ollama uses model defaults for the selected model.
+think: false
+
+system_prompt: "prompts/ai_mode_chat.md"
+
+caps:
+  num_predict: 800
+  temperature: 2.0

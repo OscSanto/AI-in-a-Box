@@ -84,17 +84,41 @@ def health():
 # Note: the client needs to know the available ZIMs and some config options at runtime, so we expose a simple endpoint for that.
 # 
 @app.get("/config")
+@app.get("/api/config")
 def client_config():
     """Runtime config for the WebUI (mode, ZIM list)."""
     import yaml as _yaml
     from pathlib import Path as _Path
     from api.chat import _available_zim_names
-    _cfg = _yaml.safe_load((_Path(__file__).parent / "SearchEngine" / "config.yaml").read_text())
+    from SearchEngine.config import _load_prompt as _load_prompt_text
+
+    _base = _Path(__file__).parent / "SearchEngine"
+    _cfg = _yaml.safe_load((_base / "config.yaml").read_text())
+    _modes_dir = _base / "modes"
+
+    def _mode_entry(name: str) -> dict:
+        _mode_cfg = {}
+        _mode_path = _modes_dir / f"{name}.yaml"
+        if _mode_path.exists():
+            _mode_cfg = _yaml.safe_load(_mode_path.read_text()) or {}
+        _prompt_path = _mode_cfg.get("system_prompt")
+        _prompt_text = _load_prompt_text(_prompt_path) if _prompt_path else ""
+        return {
+            "system_prompt_path": _prompt_path,
+            "system_prompt": _prompt_text,
+        }
+
     return {
         "inference_default_mode": "server",
         "inference_allow_user_toggle": True,
         "zims": _available_zim_names(),
         "flash_attention": bool(_cfg.get("ollama_flash_attention", False)),
+        "modes": {
+            "chat": _mode_entry("chat"),
+            "fast": _mode_entry("fast"),
+            "balanced": _mode_entry("balanced"),
+            "complex": _mode_entry("complex"),
+        },
     }
 
 

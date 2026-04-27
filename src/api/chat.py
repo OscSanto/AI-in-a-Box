@@ -405,7 +405,7 @@ async def chat_completions(request: Request):
     if not query:
         return Response("data: [DONE]\n\n", media_type="text/event-stream")
 
-    _mode_cfg = zim_retrieval._MODE_CFGS.get(mode if mode != "chat" else "balanced", {})
+    _mode_cfg = zim_retrieval._MODE_CFGS.get(mode, {})
     _retrieval_cfg = _mode_cfg.get("retrieval", {})
     _current_active_model = get_active_model()
     _llm_model = _mode_cfg.get("llm_model", _current_active_model)
@@ -429,10 +429,12 @@ async def chat_completions(request: Request):
     _default_system_prompt = _load_prompt(_prompt_path) if _prompt_path else _load_prompt(
         AI_MODE_CFG.get("system_prompt", "prompts/ai_mode.md")
     )
-    _custom_system = next(
-        (m.get("content", "").strip() for m in messages if m.get("role") == "system"), ""
-    )
-    _system_prompt = _custom_system if _custom_system else _default_system_prompt
+    _system_messages = [m for m in messages if m.get("role") == "system"]
+    _has_explicit_system = bool(_system_messages)
+    _custom_system = ""
+    if _has_explicit_system:
+        _custom_system = _message_text(_system_messages[0].get("content"))
+    _system_prompt = _custom_system if _has_explicit_system else _default_system_prompt
     _mode_think = _mode_cfg.get("think", None)
     if think is None and _mode_think is not None:
         think = bool(_mode_think)
@@ -480,15 +482,17 @@ async def chat_completions(request: Request):
             _chat_timings: dict = {}
             _history_pairs = _fork_history_pairs(messages, fork)
             _chat_client = ollama.Client(host=_backend_url, timeout=OLLAMA_TIMEOUT)
+            _chat_messages = [
+                *_history_pairs,
+                {"role": "user", "content": query},
+            ]
+            if _system_prompt:
+                _chat_messages.insert(0, {"role": "system", "content": _system_prompt})
             _chat_kwargs: dict = dict(
                 model=_llm_model,
                 options={k: v for k, v in _llm_options.items() if k != "keep_alive"},
                 keep_alive=_llm_options.get("keep_alive", "15m"),
-                messages=[
-                    {"role": "system", "content": _system_prompt},
-                    *_history_pairs,
-                    {"role": "user", "content": query},
-                ],
+                messages=_chat_messages,
                 stream=True,
             )
             if think is not None:
@@ -617,10 +621,11 @@ async def chat_completions(request: Request):
         full_answer = ""
         _history_pairs = _fork_history_pairs(messages, fork)
         llm_messages = [
-            {"role": "system", "content": _system_prompt},
             *_history_pairs,
             {"role": "user",   "content": f"Context:\n{context}\n\nQuestion: {query}"},
         ]
+        if _system_prompt:
+            llm_messages.insert(0, {"role": "system", "content": _system_prompt})
         _rag_client = ollama.Client(host=_backend_url, timeout=OLLAMA_TIMEOUT)
         _rag_chat_kwargs: dict = dict(
             model=_llm_model,

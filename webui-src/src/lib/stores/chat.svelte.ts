@@ -33,7 +33,6 @@ import {
 	findLeafNode,
 	isAbortError
 } from '$lib/utils';
-import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
 import { REASONING_TAGS } from '$lib/constants/agentic';
 import {
 	MAX_INACTIVE_CONVERSATION_STATES,
@@ -383,18 +382,7 @@ class ChatStore {
 			}
 			const am = conversationsStore.activeMessages;
 			const firstActiveMessage = am.find((m) => m.parent === rootId);
-			// Pre-fill with the current mode's default system prompt from the backend
-			let defaultPrompt = SYSTEM_MESSAGE_PLACEHOLDER;
-			try {
-				const currentMode = ragControls().mode;
-				const cfgRes = await fetch('/api/config');
-				if (cfgRes.ok) {
-					const cfg = await cfgRes.json();
-					const modeKey = currentMode === 'chat' ? 'balanced' : currentMode;
-					const modePrompt = cfg?.modes?.[modeKey]?.system_prompt?.trim();
-					if (modePrompt) defaultPrompt = modePrompt;
-				}
-			} catch { /* fall back to placeholder */ }
+			const defaultPrompt = await this.getCurrentModeSystemPrompt();
 			const systemMessage = await DatabaseService.createSystemMessage(
 				activeConv.id,
 				defaultPrompt,
@@ -423,6 +411,19 @@ class ChatStore {
 			conversationsStore.updateConversationTimestamp();
 		} catch (error) {
 			console.error('Failed to add system prompt:', error);
+		}
+	}
+
+	async getCurrentModeSystemPrompt(): Promise<string> {
+		try {
+			const currentMode = ragControls().mode;
+			const cfgRes = await fetch('/api/config');
+			if (!cfgRes.ok) return '';
+			const cfg = await cfgRes.json();
+			const modeKey = currentMode;
+			return cfg?.modes?.[modeKey]?.system_prompt?.trim() || '';
+		} catch {
+			return '';
 		}
 	}
 
@@ -1556,7 +1557,7 @@ class ChatStore {
 		if (currentConfig.custom) apiOptions.custom = currentConfig.custom;
 
 		// User sampling overrides (per-mode, only explicitly changed values)
-		const modeKey = rag.mode === 'chat' ? 'balanced' : rag.mode;
+		const modeKey = rag.mode;
 		const userOverrides = samplingOverridesStore.getForMode(modeKey);
 		if (Object.keys(userOverrides).length > 0) {
 			apiOptions.user_llm_options = userOverrides;

@@ -152,6 +152,7 @@ def _load_mode(name: str) -> dict:
     return {}
 
 _MODE_CFGS = {
+    "chat":     _load_mode("chat"),
     "fast":     _load_mode("fast"),
     "balanced": _load_mode("balanced"),
     "complex":  _load_mode("complex"),
@@ -947,6 +948,73 @@ def _semantic_rerank_candidates(chunks: list[dict], query_vec: np.ndarray) -> li
     return head + tail
 
 
+def _article_key(chunk: dict) -> tuple[str, int]:
+    return chunk.get("zim_name", ""), int(chunk.get("article_id", 0))
+
+
+def _select_prose_chunks(chunks: list[dict], top_k: int) -> list[dict]:
+    """
+    Build the final prose context article-first:
+      1. Winning article gets its best lead chunk.
+      2. Then up to two strong non-lead chunks from distinct sections.
+      3. Then remaining strong chunks from the same article.
+      4. Only then fill from other articles in rerank order.
+    """
+    if not chunks or top_k <= 0:
+        return []
+
+    ranked = sorted(chunks, key=lambda c: c.get("rerank_score", 0.0), reverse=True)
+    top_article = _article_key(ranked[0])
+    top_article_chunks = [c for c in ranked if _article_key(c) == top_article]
+    other_chunks = [c for c in ranked if _article_key(c) != top_article]
+
+    selected: list[dict] = []
+    selected_ids: set[int] = set()
+    selected_sections: set[str] = set()
+
+    def _push(chunk: dict) -> bool:
+        cid = int(chunk.get("chunk_id", 0))
+        if cid in selected_ids or len(selected) >= top_k:
+            return False
+        selected.append(chunk)
+        selected_ids.add(cid)
+        section = (chunk.get("section_title") or "").strip().lower()
+        if section:
+            selected_sections.add(section)
+        return True
+
+    lead_chunk = next(
+        (c for c in top_article_chunks if (c.get("section_title") or "").strip().lower() == "lead"),
+        None,
+    )
+    if lead_chunk is not None:
+        _push(lead_chunk)
+    else:
+        _push(top_article_chunks[0])
+
+    non_lead_distinct = 0
+    for chunk in top_article_chunks:
+        section = (chunk.get("section_title") or "").strip().lower()
+        if section == "lead" or not section or section in selected_sections:
+            continue
+        if _push(chunk):
+            non_lead_distinct += 1
+        if non_lead_distinct >= 2 or len(selected) >= top_k:
+            break
+
+    for chunk in top_article_chunks:
+        if len(selected) >= top_k:
+            break
+        _push(chunk)
+
+    for chunk in other_chunks:
+        if len(selected) >= top_k:
+            break
+        _push(chunk)
+
+    return selected
+
+
 def _structure_prior(chunk: dict) -> float:
     section = (chunk.get("section_title") or "").lower()
     idx     = int(chunk.get("chunk_index", 0))
@@ -1462,7 +1530,7 @@ def search(query_text: str, top_k: int = 10,
     # Infobox stands alone only if its article appears in prose — merge it in
     # so the LLM sees the structured facts alongside the article text, not as
     # a separate floating entry.
-    prose_top_k = all_prose[:top_k]
+    prose_top_k = _select_prose_chunks(all_prose, top_k)
     prose_article_ids = {c["article_id"] for c in prose_top_k}
     all_infobox = [c for c in all_infobox if c["article_id"] in prose_article_ids]
 
