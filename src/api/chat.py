@@ -346,13 +346,19 @@ def _print_llm_verbose(t: dict) -> None:
 
 
 async def _wake_ollama(model: str, backend_url: str = "http://localhost:11434") -> None:
-    """Fire-and-forget model warmup; generation still works if this fails."""
+    """
+    Warm up model into RAM before first user request.
+    Uses a minimal prompt (not empty) so Ollama actually loads weights.
+    Timeout is generous — a 7B Q4 model on Pi 5 can take 2+ minutes to load.
+    """
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=30) as c:
+        async with httpx.AsyncClient(timeout=300) as c:
             await c.post(
                 f"{backend_url}/api/generate",
-                json={"model": model, "keep_alive": "25m", "prompt": ""},
+                json={"model": model, "keep_alive": "25m",
+                      "prompt": "Hi", "stream": False,
+                      "options": {"num_predict": 1}},
             )
     except Exception:
         pass
