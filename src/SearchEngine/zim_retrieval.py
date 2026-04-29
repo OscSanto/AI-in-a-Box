@@ -1264,7 +1264,7 @@ def search(query_text: str, top_k: int = 10,
     """
     Search all loaded ZIM indexes.
 
-    mode      — "fast" | "balanced" | "complex"
+    mode      — "fast" | "balanced" | "complex" | "chat" (chat returns empty — no retrieval)
     query_vec — pre-computed (384,) L2-normalised embedding; pass to avoid
                 re-embedding when the caller already has the vector.
 
@@ -1278,6 +1278,9 @@ def search(query_text: str, top_k: int = 10,
 
     active = [h for h in handles if h.enabled and (not zim_name or h.name == zim_name)]
     if not active:
+        return ([], []) if debug else []
+
+    if mode == "chat":
         return ([], []) if debug else []
 
     cfg    = _MODE_CFGS.get(mode, _MODE_CFGS["balanced"])
