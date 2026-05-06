@@ -294,72 +294,6 @@ def _compact_context(chunks: list[str], mode: str, num_ctx: int) -> tuple[list[s
     return trimmed, used
 
 
-def _preview(text: str, n: int = 220) -> str:
-    text = re.sub(r"\s+", " ", (text or "")).strip()
-    return text if len(text) <= n else text[:n].rsplit(" ", 1)[0] + " ..."
-
-
-def _log_zim_handles() -> None:
-    handles = getattr(zim_retrieval, "_handles", [])
-    if not handles:
-        print("[webui-rag] zims=none", flush=True)
-        return
-    for h in handles:
-        print(f"[webui-rag] zim={h.name!r} vectors={getattr(h.idx, 'ntotal', '?')}", flush=True)
-
-
-def _log_hits(hits: list[dict]) -> None:
-    print(f"[webui-rag] retrieved_chunks={len(hits)}", flush=True)
-    for i, h in enumerate(hits, start=1):
-        sources = ",".join(h.get("candidate_sources") or [])
-        print(
-            f"  [{i:02d}] rerank={h.get('rerank_score', 0):.5f} "
-            f"fusion={h.get('fusion_score', 0):.5f} "
-            f"fusion_rank={h.get('fusion_rank', '?')} "
-            f"faiss={h.get('faiss_score', 0):.3f} "
-            f"para_bm25={h.get('para_bm25_score', 0):.5f} "
-            f"title_bm25={h.get('title_bm25_score', 0):.5f} "
-            f"sources={sources or '-'} "
-            f"zim={h.get('zim_name', '')!r} "
-            f"title={h.get('title', '')!r} "
-            f"section={h.get('section_title', '')!r}",
-            flush=True,
-        )
-        print(f"       preview={_preview(h.get('text', ''))!r}", flush=True)
-        if h.get("infobox_text"):
-            print(f"       infobox_preview={_preview(h.get('infobox_text', ''))!r}", flush=True)
-
-
-def _log_candidate_pools(pools: list[dict]) -> None:
-    print(f"[webui-rag] candidate_pools={len(pools)}", flush=True)
-    for pool in pools:
-        print(
-            f"[webui-rag] candidate_pool zim={pool.get('zim_name', '')!r} "
-            f"faiss={pool.get('faiss_candidates', 0)} "
-            f"paragraph_bm25={pool.get('paragraph_bm25_candidates', 0)} "
-            f"title_bm25_articles={pool.get('title_bm25_articles', 0)} "
-            f"unique={pool.get('unique_candidate_chunks', 0)} "
-            f"post_filter={pool.get('post_filter_chunks', 0)} "
-            f"rerank_pool={pool.get('rerank_pool_chunks', 0)}",
-            flush=True,
-        )
-        for i, h in enumerate(pool.get("chunks", []), start=1):
-            sources = ",".join(h.get("candidate_sources") or [])
-            print(
-                f"  candidate[{i:02d}] rerank={h.get('rerank_score', 0):.5f} "
-                f"fusion={h.get('fusion_score', 0):.5f} "
-                f"fusion_rank={h.get('fusion_rank', '?')} "
-                f"faiss={h.get('faiss_score', 0):.3f} "
-                f"para_bm25={h.get('para_bm25_score', 0):.5f} "
-                f"title_bm25={h.get('title_bm25_score', 0):.5f} "
-                f"sources={sources or '-'} "
-                f"title={h.get('title', '')!r} "
-                f"section={h.get('section_title', '')!r}",
-                flush=True,
-            )
-            print(f"       raw_preview={_preview(h.get('text', ''), 420)!r}", flush=True)
-
-
 def _print_llm_verbose(t: dict) -> None:
     """Print per-query LLM timing to terminal in ollama --verbose style."""
     def _ms(s):  return f"{s * 1000:.2f}ms" if s is not None and s < 1 else (f"{s:.3f}s" if s is not None else "—")
@@ -512,7 +446,12 @@ async def chat_completions(request: Request):
                 flush=True,
             )
         if full_logs:
-            _log_zim_handles()
+            _zim_handles = getattr(zim_retrieval, "_handles", [])
+            if not _zim_handles:
+                print("[webui-rag] zims=none", flush=True)
+            else:
+                for _h in _zim_handles:
+                    print(f"[webui-rag] zim={_h.name!r} vectors={getattr(_h.idx, 'ntotal', '?')}", flush=True)
 
         # ── Direct chat (no retrieval) ────────────────────────────────────────
         if mode == "chat":
@@ -608,8 +547,57 @@ async def chat_completions(request: Request):
                 flush=True,
             )
         if full_logs:
-            _log_candidate_pools(candidate_pools)
-            _log_hits(zim_hits)
+            def _preview(text: str, n: int = 220) -> str:
+                text = re.sub(r"\s+", " ", (text or "")).strip()
+                return text if len(text) <= n else text[:n].rsplit(" ", 1)[0] + " ..."
+
+            print(f"[webui-rag] candidate_pools={len(candidate_pools)}", flush=True)
+            for _pool in candidate_pools:
+                print(
+                    f"[webui-rag] candidate_pool zim={_pool.get('zim_name', '')!r} "
+                    f"faiss={_pool.get('faiss_candidates', 0)} "
+                    f"paragraph_bm25={_pool.get('paragraph_bm25_candidates', 0)} "
+                    f"title_bm25_articles={_pool.get('title_bm25_articles', 0)} "
+                    f"unique={_pool.get('unique_candidate_chunks', 0)} "
+                    f"post_filter={_pool.get('post_filter_chunks', 0)} "
+                    f"rerank_pool={_pool.get('rerank_pool_chunks', 0)}",
+                    flush=True,
+                )
+                for _i, _ch in enumerate(_pool.get("chunks", []), start=1):
+                    _src = ",".join(_ch.get("candidate_sources") or [])
+                    print(
+                        f"  candidate[{_i:02d}] rerank={_ch.get('rerank_score', 0):.5f} "
+                        f"fusion={_ch.get('fusion_score', 0):.5f} "
+                        f"fusion_rank={_ch.get('fusion_rank', '?')} "
+                        f"faiss={_ch.get('faiss_score', 0):.3f} "
+                        f"para_bm25={_ch.get('para_bm25_score', 0):.5f} "
+                        f"title_bm25={_ch.get('title_bm25_score', 0):.5f} "
+                        f"sources={_src or '-'} "
+                        f"title={_ch.get('title', '')!r} "
+                        f"section={_ch.get('section_title', '')!r}",
+                        flush=True,
+                    )
+                    print(f"       raw_preview={_preview(_ch.get('text', ''), 420)!r}", flush=True)
+
+            print(f"[webui-rag] retrieved_chunks={len(zim_hits)}", flush=True)
+            for _i, _h in enumerate(zim_hits, start=1):
+                _src = ",".join(_h.get("candidate_sources") or [])
+                print(
+                    f"  [{_i:02d}] rerank={_h.get('rerank_score', 0):.5f} "
+                    f"fusion={_h.get('fusion_score', 0):.5f} "
+                    f"fusion_rank={_h.get('fusion_rank', '?')} "
+                    f"faiss={_h.get('faiss_score', 0):.3f} "
+                    f"para_bm25={_h.get('para_bm25_score', 0):.5f} "
+                    f"title_bm25={_h.get('title_bm25_score', 0):.5f} "
+                    f"sources={_src or '-'} "
+                    f"zim={_h.get('zim_name', '')!r} "
+                    f"title={_h.get('title', '')!r} "
+                    f"section={_h.get('section_title', '')!r}",
+                    flush=True,
+                )
+                print(f"       preview={_preview(_h.get('text', ''))!r}", flush=True)
+                if _h.get("infobox_text"):
+                    print(f"       infobox_preview={_preview(_h.get('infobox_text', ''))!r}", flush=True)
 
         cached = None if bypass_cache else db_ai_mode_lookup(
             query_vec, mode=mode, zim_name=selected_zim, verbose=summary_logs,

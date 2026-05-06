@@ -24,107 +24,57 @@ def _safe(fn, fallback=None):
         return fallback
 
 
-def _cpu():
-    pcts = psutil.cpu_percent(percpu=True)
-    freq = psutil.cpu_freq()
-    return {
-        "per_core_pct": pcts,
-        "avg_pct": round(sum(pcts) / len(pcts), 1) if pcts else 0,
-        "count_logical": psutil.cpu_count(logical=True),
-        "count_physical": psutil.cpu_count(logical=False),
-        "freq_mhz": round(freq.current) if freq else None,
-        "freq_max_mhz": round(freq.max) if freq else None,
-    }
+@router.get("/cache/clear")
+def cache_clear():
+    return JSONResponse(db_clear_ai())
 
 
-def _memory():
-    ram = psutil.virtual_memory()
-    swap = psutil.swap_memory()
-    return {
-        "ram_used_mb": round(ram.used / 1024**2),
-        "ram_total_mb": round(ram.total / 1024**2),
-        "ram_pct": ram.percent,
-        "ram_avail_mb": round(ram.available / 1024**2),
-        "swap_used_mb": round(swap.used / 1024**2),
-        "swap_total_mb": round(swap.total / 1024**2),
-        "swap_pct": swap.percent,
-    }
+@router.get("/metrics/dashboard")
+def metrics_dashboard():
+    with open(_METRICS_HTML, encoding="utf-8") as f:
+        return HTMLResponse(content=f.read(), headers={"Cache-Control": "no-store"})
 
 
-def _disk():
-    u = psutil.disk_usage(os.getcwd())
-    io = psutil.disk_io_counters()
-    return {
-        "used_gb": round(u.used / 1024**3, 2),
-        "total_gb": round(u.total / 1024**3, 2),
-        "free_gb": round(u.free / 1024**3, 2),
-        "pct": u.percent,
-        "read_mb": round(io.read_bytes / 1024**2) if io else None,
-        "write_mb": round(io.write_bytes / 1024**2) if io else None,
-    }
+@router.get("/api/metrics")
+def api_metrics():
+    records  = llm_metrics.get_last(100)
+    pcts     = _safe(lambda: psutil.cpu_percent(percpu=True), [])
+    freq     = _safe(psutil.cpu_freq)
+    ram      = _safe(psutil.virtual_memory)
+    swap     = _safe(psutil.swap_memory)
+    disk_u   = _safe(lambda: psutil.disk_usage(os.getcwd()))
+    disk_io  = _safe(psutil.disk_io_counters)
+    proc_mem = _safe(_OWN_PROC.memory_info)
 
-
-def _temperatures():
-    out = []
-    for chip, entries in (psutil.sensors_temperatures() or {}).items():
+    temps = []
+    for chip, entries in (_safe(psutil.sensors_temperatures) or {}).items():
         for e in entries:
-            out.append({
-                "chip": chip,
-                "label": e.label or chip,
-                "current": e.current,
-                "high": e.high,
-                "critical": e.critical,
-            })
-    return out
+            temps.append({"chip": chip, "label": e.label or chip,
+                          "current": e.current, "high": e.high, "critical": e.critical})
 
-
-def _process():
-    mem = _OWN_PROC.memory_info()
-    try:
-        open_files = _OWN_PROC.num_fds()
-    except Exception:
-        open_files = len(_OWN_PROC.open_files())
-    return {
-        "pid": _OWN_PROC.pid,
-        "rss_mb": round(mem.rss / 1024**2, 1),
-        "vms_mb": round(mem.vms / 1024**2, 1),
-        "cpu_pct": _OWN_PROC.cpu_percent(),
-        "threads": _OWN_PROC.num_threads(),
-        "open_files": open_files,
-    }
-
-
-def _network():
-    out = []
+    network = []
     try:
         io_counters = psutil.net_io_counters(pernic=True)
         addrs = psutil.net_if_addrs()
         for iface, io in io_counters.items():
-            ipv4 = None
-            for addr in addrs.get(iface, []):
-                if addr.family == 2:  # AF_INET
-                    ipv4 = addr.address
-                    break
-            out.append({
-                "iface": iface,
-                "ipv4": ipv4,
+            ipv4 = next(
+                (a.address for a in addrs.get(iface, []) if a.family == 2), None
+            )
+            network.append({
+                "iface": iface, "ipv4": ipv4,
                 "sent_mb": round(io.bytes_sent / 1024**2, 1),
                 "recv_mb": round(io.bytes_recv / 1024**2, 1),
-                "errors_in": io.errin,
-                "errors_out": io.errout,
+                "errors_in": io.errin, "errors_out": io.errout,
             })
     except Exception:
         pass
-    return out
 
-
-def _gpu():
+    gpu = None
     try:
         import pynvml
         pynvml.nvmlInit()
-        count = pynvml.nvmlDeviceGetCount()
         gpus = []
-        for i in range(count):
+        for i in range(pynvml.nvmlDeviceGetCount()):
             h = pynvml.nvmlDeviceGetHandleByIndex(i)
             name = pynvml.nvmlDeviceGetName(h)
             if isinstance(name, bytes):
@@ -139,37 +89,55 @@ def _gpu():
                 "name": name,
                 "vram_used_mb": round(mem_info.used / 1024**2),
                 "vram_total_mb": round(mem_info.total / 1024**2),
-                "util_pct": util.gpu,
-                "temp_c": temp,
+                "util_pct": util.gpu, "temp_c": temp,
             })
-        return gpus if gpus else None
+        gpu = gpus if gpus else None
     except Exception:
-        return None
+        pass
 
+    try:
+        open_files = _OWN_PROC.num_fds()
+    except Exception:
+        open_files = len(_OWN_PROC.open_files())
 
-@router.get("/cache/clear")
-def cache_clear():
-    return JSONResponse(db_clear_ai())
-
-
-@router.get("/metrics/dashboard")
-def metrics_dashboard():
-    with open(_METRICS_HTML, encoding="utf-8") as f:
-        return HTMLResponse(content=f.read(), headers={"Cache-Control": "no-store"})
-
-
-@router.get("/api/metrics")
-def api_metrics():
-    records = llm_metrics.get_last(100)
     return JSONResponse({
         "uptime_s": round(time.time() - _BOOT_TIME),
-        "cpu": _safe(_cpu, {}),
-        "memory": _safe(_memory, {}),
-        "disk": _safe(_disk, {}),
-        "temperatures": _safe(_temperatures, []),
-        "network": _safe(_network, []),
-        "process": _safe(_process, {}),
-        "gpu": _safe(_gpu, None),
+        "cpu": {
+            "per_core_pct": pcts,
+            "avg_pct": round(sum(pcts) / len(pcts), 1) if pcts else 0,
+            "count_logical":  _safe(lambda: psutil.cpu_count(logical=True)),
+            "count_physical": _safe(lambda: psutil.cpu_count(logical=False)),
+            "freq_mhz":     round(freq.current) if freq else None,
+            "freq_max_mhz": round(freq.max) if freq else None,
+        },
+        "memory": {} if not ram else {
+            "ram_used_mb":  round(ram.used / 1024**2),
+            "ram_total_mb": round(ram.total / 1024**2),
+            "ram_pct":      ram.percent,
+            "ram_avail_mb": round(ram.available / 1024**2),
+            "swap_used_mb":  round(swap.used / 1024**2)  if swap else 0,
+            "swap_total_mb": round(swap.total / 1024**2) if swap else 0,
+            "swap_pct":      swap.percent                if swap else 0,
+        },
+        "disk": {} if not disk_u else {
+            "used_gb":  round(disk_u.used  / 1024**3, 2),
+            "total_gb": round(disk_u.total / 1024**3, 2),
+            "free_gb":  round(disk_u.free  / 1024**3, 2),
+            "pct":      disk_u.percent,
+            "read_mb":  round(disk_io.read_bytes  / 1024**2) if disk_io else None,
+            "write_mb": round(disk_io.write_bytes / 1024**2) if disk_io else None,
+        },
+        "temperatures": temps,
+        "network": network,
+        "process": {} if not proc_mem else {
+            "pid":        _OWN_PROC.pid,
+            "rss_mb":     round(proc_mem.rss / 1024**2, 1),
+            "vms_mb":     round(proc_mem.vms / 1024**2, 1),
+            "cpu_pct":    _safe(_OWN_PROC.cpu_percent, 0),
+            "threads":    _safe(_OWN_PROC.num_threads, 0),
+            "open_files": open_files,
+        },
+        "gpu": gpu,
         "llm": {"count": len(records), "records": records},
     }, headers={"Cache-Control": "no-store"})
 

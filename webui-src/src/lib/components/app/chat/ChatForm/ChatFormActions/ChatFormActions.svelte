@@ -13,21 +13,7 @@
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { activeMessages } from '$lib/stores/conversations.svelte';
-	import {
-		ragControls,
-		setRagMode,
-		type RagMode,
-		modelSupportsThinking
-	} from '$lib/stores/ragControls.svelte';
-
-	let currentMode = $derived(ragControls().mode);
-
-	const MODES: { value: RagMode; label: string }[] = [
-		{ value: 'fast',     label: 'Fast'     },
-		{ value: 'balanced', label: 'Balanced' },
-		{ value: 'complex',  label: 'Complex'  },
-		{ value: 'chat',     label: 'Chat'     },
-	];
+	import { modelSupportsThinking } from '$lib/stores/ragControls.svelte';
 
 	interface Props {
 		canSend?: boolean;
@@ -181,22 +167,6 @@
 			{onSystemPromptClick}
 		/>
 
-		<!-- Pipeline mode buttons -->
-		<div class="flex items-center gap-0.5 rounded-full border border-border bg-muted/40 p-0.5">
-			{#each MODES as m}
-				<button
-					type="button"
-					disabled={disabled}
-					onclick={() => setRagMode(m.value)}
-					class="rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors sm:px-2.5 sm:text-xs
-						{currentMode === m.value
-							? 'bg-primary text-primary-foreground shadow-sm'
-							: 'text-muted-foreground hover:text-foreground'}"
-				>
-					{m.label}
-				</button>
-			{/each}
-		</div>
 	</div>
 
 	{#if isLoading}

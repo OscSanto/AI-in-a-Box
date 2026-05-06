@@ -362,13 +362,13 @@
 			onpaste={handlePaste}
 		>
 			<div class="flex flex-wrap gap-1.5 px-5 pb-2 text-xs">
-				{#if currentRagControls.mode !== 'balanced'}
+				{#if currentRagControls.mode !== 'chat'}
 					<button
 						type="button"
 						class="rounded-full border border-border bg-muted/70 px-2 py-0.5 text-muted-foreground transition hover:text-foreground"
 						onclick={resetRagMode}
 					>
-						Mode: {currentRagControls.mode} x
+						ZIM: {currentRagControls.mode === 'fast' ? 'Fast' : currentRagControls.mode === 'complex' ? 'Complex' : 'Default'} ×
 					</button>
 				{/if}
 				{#if currentRagControls.selectedZim !== 'all'}

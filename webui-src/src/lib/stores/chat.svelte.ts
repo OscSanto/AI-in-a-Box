@@ -1482,7 +1482,7 @@ class ChatStore {
 		const apiOptions: Record<string, unknown> = {
 			stream: true,
 			timings_per_token: true,
-			mode: rag.mode || pipelineMode(),
+			mode: rag.mode === 'chat' ? 'chat' : (rag.mode || pipelineMode()),
 			zim: rag.selectedZim,
 			bypass_cache: rag.bypassCache,
 			log_level: rag.logLevel,

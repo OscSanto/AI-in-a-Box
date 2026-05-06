@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { Plus, MessageSquare, Sparkles, Brain, RotateCcw } from '@lucide/svelte';
+	import { Plus, MessageSquare, Sparkles, Brain, RotateCcw, Sliders } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { FILE_TYPE_ICONS } from '$lib/constants/icons';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants/tooltip-config';
-	import { ragControls, setBypassCache, toggleThinking, resetRagControls } from '$lib/stores/ragControls.svelte';
+	import { ragControls, setBypassCache, toggleThinking, resetRagControls, setRagMode, type RagMode } from '$lib/stores/ragControls.svelte';
 
 	interface Props {
 		class?: string;
@@ -29,6 +29,9 @@
 	}: Props = $props();
 
 	let currentThinking = $derived(ragControls().thinking);
+	let currentMode = $derived(ragControls().mode);
+	const MODE_LABELS: Record<string, string> = { fast: 'Fast', balanced: 'Default', complex: 'Complex', chat: 'Default' };
+	let modeLabel = $derived(MODE_LABELS[currentMode] ?? currentMode);
 
 	let isNewChat = $derived(!page.params.id);
 
@@ -176,6 +179,40 @@
 
 			<DropdownMenu.Separator />
 			<DropdownMenu.Label class="text-[10px] uppercase tracking-wider text-muted-foreground/60">Commands</DropdownMenu.Label>
+
+			<!-- ZIM mode submenu -->
+			<DropdownMenu.Sub>
+				<DropdownMenu.SubTrigger class="flex cursor-pointer items-start gap-2 py-2">
+					<Sliders class="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+					<div class="min-w-0">
+						<p class="font-mono text-xs">ZIM</p>
+						<p class="text-xs text-muted-foreground">Currently: {modeLabel}</p>
+					</div>
+				</DropdownMenu.SubTrigger>
+				<DropdownMenu.SubContent>
+					<DropdownMenu.Item
+						class="flex items-center gap-2 {currentMode === 'fast' ? 'font-medium text-foreground' : ''}"
+						onclick={() => setRagMode('fast')}
+					>
+						{#if currentMode === 'fast'}<span class="h-1.5 w-1.5 rounded-full bg-primary shrink-0"></span>{:else}<span class="h-1.5 w-1.5 shrink-0"></span>{/if}
+						Fast
+					</DropdownMenu.Item>
+					<DropdownMenu.Item
+						class="flex items-center gap-2 {currentMode === 'balanced' ? 'font-medium text-foreground' : ''}"
+						onclick={() => setRagMode('balanced')}
+					>
+						{#if currentMode === 'balanced'}<span class="h-1.5 w-1.5 rounded-full bg-primary shrink-0"></span>{:else}<span class="h-1.5 w-1.5 shrink-0"></span>{/if}
+						Default
+					</DropdownMenu.Item>
+					<DropdownMenu.Item
+						class="flex items-center gap-2 {currentMode === 'complex' ? 'font-medium text-foreground' : ''}"
+						onclick={() => setRagMode('complex')}
+					>
+						{#if currentMode === 'complex'}<span class="h-1.5 w-1.5 rounded-full bg-primary shrink-0"></span>{:else}<span class="h-1.5 w-1.5 shrink-0"></span>{/if}
+						Complex
+					</DropdownMenu.Item>
+				</DropdownMenu.SubContent>
+			</DropdownMenu.Sub>
 
 			<!-- /new — bypass cache -->
 			<DropdownMenu.Item

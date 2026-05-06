@@ -6,12 +6,11 @@ Serves the built WebUI and implements the OpenAI-compatible
 Python engine code instead of proxied to a second SearchEngine HTTP server.
 
 Concerns are split across api/ routers:
-  api/backends.py  — inference backend priority chain (Android mDNS + user remotes + Pi Local)
-  api/models.py    — model discovery, runtime model switching, curated store, HF search
-  api/chat.py      — /v1/chat/completions (RAG pipeline + direct chat)
-  api/metrics.py   — LLM performance metrics
-  api/libraries.py — ZIM library management
-  api/embed.py     — on-demand article embedding + title index build
+  api/backends.py — inference backend priority chain (Android mDNS + user remotes + Pi Local)
+  api/models.py   — model discovery, runtime model switching, curated store, HF search
+  api/chat.py     — /v1/chat/completions (RAG pipeline + direct chat)
+  api/metrics.py  — LLM performance metrics
+  api/library.py  — ZIM library management + on-demand article embedding + title index build
 """
 import os
 from contextlib import asynccontextmanager
@@ -26,8 +25,7 @@ from SearchEngine.metrics import llm_metrics
 from api.backends import router as backends_router
 from api.backends import start as backends_start, stop as backends_stop
 from api.chat import router as chat_router
-from api.embed import router as embed_router
-from api.libraries import router as libraries_router
+from api.library import router as library_router
 from api.metrics import router as metrics_router
 from api.models import router as models_router
 
@@ -59,8 +57,7 @@ app.include_router(backends_router)
 app.include_router(models_router)
 app.include_router(chat_router)
 app.include_router(metrics_router)
-app.include_router(libraries_router)
-app.include_router(embed_router)
+app.include_router(library_router)
 
 app.mount("/_app", StaticFiles(directory=os.path.join(WEBUI_DIR, "_app")), name="app_static")
 
@@ -87,38 +84,24 @@ def health():
 @app.get("/api/config")
 def client_config():
     """Runtime config for the WebUI (mode, ZIM list)."""
-    import yaml as _yaml
-    from pathlib import Path as _Path
     from api.chat import _available_zim_names
-    from SearchEngine.config import _load_prompt as _load_prompt_text
-
-    _base = _Path(__file__).parent / "SearchEngine"
-    _cfg = _yaml.safe_load((_base / "config.yaml").read_text())
-    _modes_dir = _base / "modes"
+    from SearchEngine.config import CFG, _load_prompt
+    from SearchEngine.zim_retrieval import _MODE_CFGS
 
     def _mode_entry(name: str) -> dict:
-        _mode_cfg = {}
-        _mode_path = _modes_dir / f"{name}.yaml"
-        if _mode_path.exists():
-            _mode_cfg = _yaml.safe_load(_mode_path.read_text()) or {}
-        _prompt_path = _mode_cfg.get("system_prompt")
-        _prompt_text = _load_prompt_text(_prompt_path) if _prompt_path else ""
+        mode_cfg = _MODE_CFGS.get(name, {})
+        prompt_path = mode_cfg.get("system_prompt")
         return {
-            "system_prompt_path": _prompt_path,
-            "system_prompt": _prompt_text,
+            "system_prompt_path": prompt_path,
+            "system_prompt": _load_prompt(prompt_path) if prompt_path else "",
         }
 
     return {
         "inference_default_mode": "server",
         "inference_allow_user_toggle": True,
         "zims": _available_zim_names(),
-        "flash_attention": bool(_cfg.get("ollama_flash_attention", False)),
-        "modes": {
-            "chat": _mode_entry("chat"),
-            "fast": _mode_entry("fast"),
-            "balanced": _mode_entry("balanced"),
-            "complex": _mode_entry("complex"),
-        },
+        "flash_attention": bool(CFG.get("ollama_flash_attention", False)),
+        "modes": {name: _mode_entry(name) for name in ("chat", "fast", "balanced", "complex")},
     }
 
 

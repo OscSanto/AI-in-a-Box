@@ -39,7 +39,7 @@ export interface RagControlsState {
 }
 
 const DEFAULT_STATE: RagControlsState = {
-	mode: 'balanced',
+	mode: 'chat',
 	selectedZim: 'all',
 	bypassCache: false,
 	logLevel: 'full',

@@ -1,19 +1,14 @@
 """
-On-demand article embedding and title index management API.
+ZIM library management and on-demand article embedding.
 
-POST /api/embed/{zim_name}
-    Body: {"path": "A/Heart_attack"} or {"title": "Heart attack"}
-    Embeds the article's chunks and adds them to the ZIM's FAISS index.
+GET  /api/libraries                              — list all ZIM handles
+POST /api/libraries/rescan                       — rescan ZIM directory
+PUT  /api/libraries/{name}                       — enable/disable or set count
 
-POST /api/libraries/{zim_name}/build-title-index
-    Triggers building the title index for a ZIM (background thread).
-    Returns 409 if already building.
-
+POST /api/embed/{zim_name}                       — embed one article into FAISS
+POST /api/libraries/{zim_name}/build-title-index — start title index build
 GET  /api/libraries/{zim_name}/title-index-status
-    Returns {ready, count, building, progress}.
-
 GET  /api/libraries/{zim_name}/embed-limits
-    Returns {embedded_articles, max_articles, embedded_vectors, max_vectors, ...}.
 """
 import threading
 from fastapi import APIRouter, Request
@@ -23,12 +18,47 @@ from SearchEngine import zim_retrieval
 
 router = APIRouter()
 
-# Track active title-index builds: {zim_name: {done, total, finished, error}}
+# Active title-index builds: {zim_name: {done, total, building, finished, error}}
 _builds: dict[str, dict] = {}
 _builds_lock = threading.Lock()
 
 
-# ── Embed a specific article ──────────────────────────────────────────────────
+# ── Library management ────────────────────────────────────────────────────────
+
+@router.get("/api/libraries")
+def get_libraries():
+    return JSONResponse({"libraries": zim_retrieval.get_all_handles()})
+
+
+@router.post("/api/libraries/rescan")
+def rescan_libraries():
+    count = zim_retrieval.rescan()
+    return JSONResponse({"ok": True, "count": count, "libraries": zim_retrieval.get_all_handles()})
+
+
+@router.put("/api/libraries/{name}")
+async def update_library(name: str, request: Request):
+    body    = await request.json()
+    enabled = body.get("enabled")
+    count   = body.get("count")
+
+    if count is not None:
+        try:
+            count = max(1, int(count))
+        except (TypeError, ValueError):
+            return JSONResponse({"ok": False, "error": "count must be an integer"}, status_code=400)
+
+    result = zim_retrieval.update_handle(name, enabled=enabled, count=count)
+    if result == "locked":
+        return JSONResponse({"ok": False, "error": f"ZIM '{name}' is managed by admin"}, status_code=403)
+    if not result:
+        return JSONResponse({"ok": False, "error": f"ZIM '{name}' not found"}, status_code=404)
+
+    zim_retrieval.write_config_zims()
+    return JSONResponse({"ok": True})
+
+
+# ── Article embedding ─────────────────────────────────────────────────────────
 
 @router.post("/api/embed/{zim_name}")
 async def embed_article(zim_name: str, request: Request):
@@ -39,40 +69,32 @@ async def embed_article(zim_name: str, request: Request):
     if not path and not title:
         return JSONResponse({"ok": False, "error": "Provide 'path' or 'title'"}, status_code=400)
 
-    # If title given, resolve to path via title index
     if not path and title:
-        path = _resolve_title_to_path(zim_name, title)
+        import sqlite3
+        from SearchEngine.zim_retrieval import _handles, _handles_lock
+        from indexer.title_index import _title_db_path
+
+        with _handles_lock:
+            handle = next((h for h in _handles if h.name == zim_name), None)
+        if not handle:
+            return JSONResponse({"ok": False, "error": f"Article '{title}' not found in title index"}, status_code=404)
+
+        db_path = _title_db_path(handle.zim_path)
+        if db_path.exists():
+            try:
+                con = sqlite3.connect(str(db_path))
+                row = con.execute(
+                    "SELECT path FROM titles WHERE LOWER(title) = LOWER(?) LIMIT 1", (title,)
+                ).fetchone()
+                con.close()
+                path = row[0] if row else ""
+            except Exception:
+                path = ""
         if not path:
             return JSONResponse({"ok": False, "error": f"Article '{title}' not found in title index"}, status_code=404)
 
     result = zim_retrieval.embed_article(zim_name, path)
-    status = 200 if result["ok"] else 400
-    return JSONResponse(result, status_code=status)
-
-
-def _resolve_title_to_path(zim_name: str, title: str) -> str | None:
-    """Look up a title in the title DB and return its ZIM path."""
-    import sqlite3
-    from SearchEngine.zim_retrieval import ZIM_INDEX_BASE, _handles, _handles_lock
-    from indexer.title_index import _title_db_path
-
-    with _handles_lock:
-        handle = next((h for h in _handles if h.name == zim_name), None)
-    if not handle:
-        return None
-
-    db_path = _title_db_path(handle.zim_path)
-    if not db_path.exists():
-        return None
-    try:
-        con = sqlite3.connect(str(db_path))
-        row = con.execute(
-            "SELECT path FROM titles WHERE LOWER(title) = LOWER(?) LIMIT 1", (title,)
-        ).fetchone()
-        con.close()
-        return row[0] if row else None
-    except Exception:
-        return None
+    return JSONResponse(result, status_code=200 if result["ok"] else 400)
 
 
 # ── Title index build ─────────────────────────────────────────────────────────
@@ -80,8 +102,7 @@ def _resolve_title_to_path(zim_name: str, title: str) -> str | None:
 @router.post("/api/libraries/{zim_name}/build-title-index")
 def start_title_index_build(zim_name: str):
     with _builds_lock:
-        state = _builds.get(zim_name, {})
-        if state.get("building"):
+        if _builds.get(zim_name, {}).get("building"):
             return JSONResponse({"ok": False, "error": "Already building"}, status_code=409)
         _builds[zim_name] = {"done": 0, "total": 0, "building": True, "finished": False, "error": None}
 
@@ -94,10 +115,12 @@ def start_title_index_build(zim_name: str):
 
         result = zim_retrieval.build_title_index(zim_name, progress_cb=_progress)
         with _builds_lock:
-            _builds[zim_name]["building"]  = False
-            _builds[zim_name]["finished"]  = True
-            _builds[zim_name]["error"]     = result.get("error")
-            _builds[zim_name]["indexed"]   = result.get("indexed", 0)
+            _builds[zim_name].update({
+                "building": False,
+                "finished": True,
+                "error":    result.get("error"),
+                "indexed":  result.get("indexed", 0),
+            })
 
     threading.Thread(target=_run, daemon=True, name=f"title-index-{zim_name}").start()
     return JSONResponse({"ok": True, "message": "Title index build started"})
@@ -106,7 +129,7 @@ def start_title_index_build(zim_name: str):
 @router.get("/api/libraries/{zim_name}/title-index-status")
 def title_index_status(zim_name: str):
     from indexer.title_index import title_db_count, title_db_exists
-    from SearchEngine.zim_retrieval import _handles, _handles_lock, ZIM_INDEX_BASE
+    from SearchEngine.zim_retrieval import _handles, _handles_lock
 
     with _handles_lock:
         handle = next((h for h in _handles if h.name == zim_name), None)
