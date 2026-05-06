@@ -28,8 +28,43 @@ from api.backends import select_backend
 from api.models import OLLAMA_SUPPORTED_KEYS, get_active_model
 
 import asyncio
+import queue as _queue
+import threading as _threading
 
 router = APIRouter()
+
+
+def _ollama_stream_with_heartbeat(stream, heartbeat_interval: float = 15.0):
+    """
+    Wrap a blocking Ollama stream, yielding raw '': ping\\n\\n' SSE comments
+    every heartbeat_interval seconds while waiting for the first/next token.
+    Prevents Cloudflare 524 during slow model load on low-power hardware.
+    """
+    q: _queue.Queue = _queue.Queue()
+
+    def _worker():
+        try:
+            for chunk in stream:
+                q.put(("chunk", chunk))
+        except Exception as exc:
+            q.put(("error", exc))
+        finally:
+            q.put(("done", None))
+
+    _threading.Thread(target=_worker, daemon=True).start()
+
+    while True:
+        try:
+            kind, val = q.get(timeout=heartbeat_interval)
+        except _queue.Empty:
+            yield ": ping\n\n"
+            continue
+        if kind == "chunk":
+            yield val
+        elif kind == "error":
+            raise val
+        else:
+            break
 
 # ── Short fork-memory helpers ────────────────────────────────────────────────
 # The WebUI persists conversation trees in browser IndexedDB and sends the
@@ -505,7 +540,10 @@ async def chat_completions(request: Request):
                 _chat_kwargs["think"] = bool(think)
             try:
                 stream = _chat_client.chat(**_chat_kwargs)
-                for chunk in stream:
+                for chunk in _ollama_stream_with_heartbeat(stream):
+                    if isinstance(chunk, str):  # SSE heartbeat comment
+                        yield chunk
+                        continue
                     thinking = chunk["message"].get("thinking") or ""
                     if thinking:
                         yield _sse_thinking(chat_id, created, thinking)
@@ -645,7 +683,10 @@ async def chat_completions(request: Request):
         _last_timings: dict = {}
         try:
             stream = _rag_client.chat(**_rag_chat_kwargs)
-            for chunk in stream:
+            for chunk in _ollama_stream_with_heartbeat(stream):
+                if isinstance(chunk, str):  # SSE heartbeat comment
+                    yield chunk
+                    continue
                 thinking = chunk["message"].get("thinking") or ""
                 if thinking:
                     yield _sse_thinking(chat_id, created, thinking)
