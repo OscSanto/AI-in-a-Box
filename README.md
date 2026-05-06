@@ -43,6 +43,17 @@ scripts/                            launch, nginx, and build helpers
 src/archive/                        archived legacy experiments/reference code
 ```
 
+## Scripts
+
+| Script | Purpose | Action |
+|--------|---------|--------|
+| `setup.sh` | Full first-run initialisation | Builds the WebUI from source (`webui-src/`) and downloads WebLLM model assets. |
+| `build-webui.sh` | Rebuild the frontend after UI edits | Runs `npm install` + `npm run build` in `webui-src/`, then copies compiled output into `webui/`. |
+| `start.sh` | Start the application server | Activates the conda env, kills any existing server process, then launches uvicorn on `0.0.0.0:5050`. |
+| `nginx_conf.sh` | Configure nginx as a reverse proxy | Copies `aiiab.conf` to `/etc/nginx/conf.d/`, tests the config, and reloads nginx. |
+| `aiiab.conf` | nginx site config | Defines proxy rules for the app, with `proxy_buffering off` required for SSE token streaming. |
+| `swappiness.sh` | Reduce swap aggression on low-RAM hardware | Sets `vm.swappiness=10` (vs default 60) to keep model weights in RAM. Has `apply`/`revert` modes. |
+
 ## Running
 
 ```bash
