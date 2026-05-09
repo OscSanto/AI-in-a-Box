@@ -4,9 +4,7 @@ export type RagMode = PipelineMode | 'chat';
 export type RagLogLevel = 'off' | 'summary' | 'full';
 
 export const RAG_COMMANDS = [
-	'/fast',
 	'/balanced',
-	'/complex',
 	'/chat',
 	'/zim',
 	'/zim all',
@@ -138,8 +136,8 @@ function parseLeadingCommand(input: string): {
 		return match[0].trim();
 	}
 
-	if (command === 'fast' || command === 'balanced' || command === 'balance' || command === 'complex') {
-		setRagMode(command === 'balance' ? 'balanced' : command);
+	if (command === 'balanced' || command === 'balance') {
+		setRagMode('balanced');
 		return { handled: true, remaining: text.slice(consumed).trimStart() };
 	}
 	if (command === 'chat') {
@@ -195,7 +193,7 @@ function parseLeadingCommand(input: string): {
 		return {
 			handled: true,
 			message:
-				'Commands: /fast, /balanced, /complex, /chat, /zim <name>, /zim all, /new, /cache, /log off|summary|full, /reset',
+				'Commands: /balanced, /chat, /zim <name>, /zim all, /new, /cache, /log off|summary|full, /reset',
 			remaining: text.slice(consumed).trimStart()
 		};
 	}

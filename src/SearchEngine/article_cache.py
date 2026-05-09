@@ -84,7 +84,7 @@ class FaissLruLoader:
                 return self._loaded[name]
 
         # Load outside lock so we don't block other searches during IO
-        from indexer import index as faiss_index
+        from SearchEngine import index as faiss_index
         idx = faiss_index.load_or_create(idx_path)
 
         with self._lock:

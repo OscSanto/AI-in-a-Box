@@ -368,7 +368,7 @@
 						class="rounded-full border border-border bg-muted/70 px-2 py-0.5 text-muted-foreground transition hover:text-foreground"
 						onclick={resetRagMode}
 					>
-						ZIM: {currentRagControls.mode === 'fast' ? 'Fast' : currentRagControls.mode === 'complex' ? 'Complex' : 'Default'} ×
+						ZIM ×
 					</button>
 				{/if}
 				{#if currentRagControls.selectedZim !== 'all'}

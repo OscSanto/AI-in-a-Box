@@ -1,18 +1,17 @@
 """
 ZIM retrieval bridge for SearchEngine.
 
-Loaded once at import time — discovers which configured ZIMs have a built
-FAISS index and opens them. Provides search() with three modes:
+Loaded once at import time — discovers configured ZIMs with a built FAISS
+index and opens them. Provides search() in two modes:
 
-  fast     — FAISS + BM25, small candidate pool, lightweight reranker
-  balanced — FAISS + BM25, medium pool, stronger fusion + reranker (default)
-  complex  — FAISS + BM25, large pool, stronger fusion + reranker
+  chat     — no retrieval, returns empty
+  balanced — FAISS + BM25, candidate fusion, heuristic reranker (default)
 
-Retrieval is now two-stage:
+Retrieval is two-stage:
   1. Candidate fusion with RRF over dense, paragraph BM25, title BM25,
-     section/header overlap, and simple structural priors.
-  2. Optional reranking over the fused pool. Set retrieval.reranker to "rrf"
-     for pure RRF order, or "heuristic" for the weighted second stage.
+     section/header overlap, and structural priors.
+  2. Reranking over the fused pool. Set retrieval.reranker to "rrf" for
+     pure RRF order, or "heuristic" for the weighted second stage.
 """
 import sys
 import os
@@ -35,13 +34,13 @@ try:
 except Exception:
     _LIBZIM_OK = False
 
-from indexer import index as faiss_index
-from indexer.db import (
+from SearchEngine import index as faiss_index
+from SearchEngine.db import (
     open_db, init_fts,
     title_search_scored, chunk_text_search, get_chunks_by_ids,
 )
 from SearchEngine.config import CFG
-from SearchEngine.embedding import _st_encode as _encode
+from SearchEngine.embedding import _encode
 from SearchEngine.keywords import extract_keywords
 
 _RETRIEVAL_CFG = CFG.get("retrieval", {})
@@ -81,7 +80,6 @@ _RRF_W_SEMANTIC  = float(_RRF_WEIGHT_CFG.get("semantic", 1.0))
 _RRF_W_PARA_BM25 = float(_RRF_WEIGHT_CFG.get("paragraph_bm25", 1.0))
 _RRF_W_TITLE     = float(_RRF_WEIGHT_CFG.get("title_bm25", 0.9))
 _RRF_W_SECTION   = float(_RRF_WEIGHT_CFG.get("section_overlap", 0.6))
-_RRF_W_ASPECT    = float(_RRF_WEIGHT_CFG.get("aspect_section", 0.9))
 _RRF_W_TITLE_TOK = float(_RRF_WEIGHT_CFG.get("title_query_overlap", 0.5))
 _RRF_W_STRUCTURE = float(_RRF_WEIGHT_CFG.get("structure_prior", 0.3))
 
@@ -91,7 +89,6 @@ _W_SEMANTIC  = float(_WEIGHT_CFG.get("semantic", 0.24))
 _W_PARA_BM25 = float(_WEIGHT_CFG.get("paragraph_bm25", 0.16))
 _W_TITLE     = float(_WEIGHT_CFG.get("title_bm25", 0.08))
 _W_SECTION   = float(_WEIGHT_CFG.get("section_overlap", 0.08))
-_W_ASPECT    = float(_WEIGHT_CFG.get("aspect_section", 0.08))
 _W_TITLE_TOK = float(_WEIGHT_CFG.get("title_query_overlap", 0.04))
 _W_COVERAGE  = float(_WEIGHT_CFG.get("query_coverage", 0.03))
 _W_STRUCTURE = float(_WEIGHT_CFG.get("structure_prior", 0.03))
@@ -108,38 +105,6 @@ _OD_TITLE_SEARCH_TOP     = int(_OD_CFG.get("title_search_candidates", 20))
 _OD_AUTO_EMBED           = bool(_OD_CFG.get("auto_embed", False))
 _OD_AUTO_EMBED_THRESHOLD = float(_OD_CFG.get("auto_embed_score_threshold", 0.72))
 _TOK_RE        = re.compile(r"[a-z0-9]+")
-_ASPECT_SYNONYMS = {
-    "development": {
-        "development", "history", "economy", "economic", "growth", "urban",
-        "urbanisation", "urbanization", "industry", "industrial", "trade",
-        "port", "infrastructure", "modern", "modernisation", "modernization",
-        "finance", "financial", "expansion",
-    },
-    "history": {
-        "history", "historical", "background", "origins", "origin", "timeline",
-        "colonial", "development",
-    },
-    "economy": {
-        "economy", "economic", "finance", "financial", "trade", "industry",
-        "industrial", "market", "business", "development",
-    },
-    "politics": {
-        "politics", "political", "government", "administration", "law",
-        "legal", "policy", "governance",
-    },
-    "demographics": {
-        "demographics", "population", "people", "ethnic", "ethnicity",
-        "migration",
-    },
-    "culture": {
-        "culture", "cultural", "society", "language", "languages", "religion",
-        "arts", "music", "media",
-    },
-    "transport": {
-        "transport", "transportation", "rail", "road", "airport", "harbour",
-        "harbor", "port", "infrastructure",
-    },
-}
 
 
 # ── Mode configs ──────────────────────────────────────────────────────────────
@@ -153,9 +118,7 @@ def _load_mode(name: str) -> dict:
 
 _MODE_CFGS = {
     "chat":     _load_mode("chat"),
-    "fast":     _load_mode("fast"),
     "balanced": _load_mode("balanced"),
-    "complex":  _load_mode("complex"),
 }
 
 # ── Shared caches (module-level singletons) ───────────────────────────────────
@@ -248,7 +211,7 @@ class _ZimHandle:
 
     @property
     def has_title_index(self) -> bool:
-        from indexer.title_index import title_db_exists
+        from SearchEngine.title_index import title_db_exists
         return title_db_exists(self.zim_path)
 
     def _load_title_data(self) -> bool:
@@ -261,7 +224,7 @@ class _ZimHandle:
             if self._title_vecs is not None:
                 return True
             try:
-                from indexer.title_index import open_title_db, load_all_vecs
+                from SearchEngine.title_index import open_title_db, load_all_vecs
                 con = open_title_db(self.zim_path)
                 vecs, paths, titles = load_all_vecs(con)
                 con.close()
@@ -280,7 +243,7 @@ class _ZimHandle:
         """Semantic title search. Returns [{path, title, score}]."""
         if not self._load_title_data():
             return []
-        from indexer.title_index import search_titles
+        from SearchEngine.title_index import search_titles
         return search_titles(self._title_vecs, self._title_paths, self._title_titles,
                              query_vec, top_k=top_k)
 
@@ -295,7 +258,7 @@ class _ZimHandle:
         if not self.archive:
             return []
         try:
-            from indexer.extract import extract as _extract
+            from SearchEngine.extract import extract as _extract
             entry  = self.archive.get_entry_by_path(path)
             item   = entry.get_item()
             html   = bytes(item.content).decode("utf-8", errors="replace")
@@ -356,8 +319,8 @@ class _ZimHandle:
         if not chunks:
             return -1
 
-        from indexer.db import insert_article, insert_chunks, mark_embedded, article_exists
-        from indexer import index as faiss_index
+        from SearchEngine.db import insert_article, insert_chunks, mark_embedded, article_exists
+        from SearchEngine import index as faiss_index
         from SearchEngine.embedding import embed_batch
 
         try:
@@ -421,7 +384,7 @@ class _ZimHandle:
         }
 
     def status(self) -> dict:
-        from indexer.title_index import title_db_count
+        from SearchEngine.title_index import title_db_count
         zim_size  = self.zim_path.stat().st_size if self.zim_path.exists() else 0
         idx_size  = self._idx_path.stat().st_size if self._idx_path.exists() else 0
         db_size   = self._db_path.stat().st_size  if self._db_path.exists()  else 0
@@ -483,7 +446,7 @@ class _ZimHandle:
             print(f"[zim_retrieval] Xapian search failed ({self.name}): {e}", flush=True)
             return []
 
-        from indexer.extract import extract
+        from SearchEngine.extract import extract
         from bs4 import BeautifulSoup
 
         chunks = []
@@ -724,32 +687,6 @@ def _tokenize(text: str) -> list[str]:
     return _TOK_RE.findall((text or "").lower())
 
 
-def _query_aspects(query_text: str) -> set[str]:
-    tokens = set(_tokenize(query_text))
-    aspects: set[str] = set()
-    for aspect, synonyms in _ASPECT_SYNONYMS.items():
-        if tokens & synonyms:
-            aspects.add(aspect)
-    return aspects
-
-
-def _aspect_section_score(query_text: str, section_title: str) -> float:
-    aspects = _query_aspects(query_text)
-    if not aspects:
-        return 0.0
-
-    section_tokens = set(_tokenize(section_title))
-    if not section_tokens:
-        return 0.0
-
-    best = 0.0
-    for aspect in aspects:
-        synonyms = _ASPECT_SYNONYMS[aspect]
-        overlap = len(section_tokens & synonyms)
-        if overlap:
-            best = max(best, overlap / max(1, min(len(section_tokens), 4)))
-    return min(1.0, best)
-
 
 def _rank_map(score_map: dict, reverse: bool = True) -> dict:
     ordered = sorted(score_map.items(), key=lambda kv: kv[1], reverse=reverse)
@@ -791,7 +728,6 @@ def _answer_signal(query_text: str, chunk: dict) -> float:
     return max(
         _body_query_coverage(query_text, chunk),
         _section_overlap(query_text, chunk["section_title"]),
-        _aspect_section_score(query_text, chunk["section_title"]),
     )
 
 
@@ -1092,9 +1028,6 @@ def _fuse_candidates(chunks: list[dict],
     sec_rank = _rank_map({c["chunk_id"]: _section_overlap(query_text, c["section_title"])
                           for c in chunks
                           if _section_overlap(query_text, c["section_title"]) > 0.0})
-    aspect_rank = _rank_map({c["chunk_id"]: _aspect_section_score(query_text, c["section_title"])
-                             for c in chunks
-                             if _aspect_section_score(query_text, c["section_title"]) > 0.0})
     tit_rank = _rank_map({c["chunk_id"]: _title_token_overlap(query_text, c["title"])
                           for c in chunks
                           if _title_token_overlap(query_text, c["title"]) > 0.0})
@@ -1104,7 +1037,6 @@ def _fuse_candidates(chunks: list[dict],
     _rrf_add(fused, par_rank, _RRF_W_PARA_BM25)
     _rrf_add(fused, title_rank, _RRF_W_TITLE)
     _rrf_add(fused, sec_rank, _RRF_W_SECTION)
-    _rrf_add(fused, aspect_rank, _RRF_W_ASPECT)
     _rrf_add(fused, tit_rank, _RRF_W_TITLE_TOK)
     _rrf_add(fused, struct_rank, _RRF_W_STRUCTURE)
     return fused
@@ -1130,8 +1062,6 @@ def _rerank(chunks: list[dict],
     title_raw   = {c["chunk_id"]: title_bm25.get(c["article_id"], 0.0) for c in chunks}
     section_raw = {c["chunk_id"]: _section_overlap(query_text, c["section_title"])
                    for c in chunks}
-    aspect_raw = {c["chunk_id"]: _aspect_section_score(query_text, c["section_title"])
-                  for c in chunks}
     title_tok_raw = {c["chunk_id"]: _title_token_overlap(query_text, c["title"])
                      for c in chunks}
     coverage_raw = {c["chunk_id"]: _query_coverage(query_text, c)
@@ -1142,7 +1072,6 @@ def _rerank(chunks: list[dict],
     n_par = _minmax(para_raw)
     n_tit = _minmax(title_raw)
     n_sec = _minmax(section_raw)
-    n_aspect = _minmax(aspect_raw)
     n_title_tok = _minmax(title_tok_raw)
     n_cov = _minmax(coverage_raw)
     n_struct = _minmax(struct_raw)
@@ -1156,7 +1085,6 @@ def _rerank(chunks: list[dict],
             + _W_PARA_BM25 * n_par.get(cid, 0.0)
             + _W_TITLE     * n_tit.get(cid, 0.0)
             + _W_SECTION   * n_sec.get(cid, 0.0)
-            + _W_ASPECT    * n_aspect.get(cid, 0.0)
             + _W_TITLE_TOK * n_title_tok.get(cid, 0.0)
             + _W_COVERAGE  * n_cov.get(cid, 0.0)
             + _W_STRUCTURE * n_struct.get(cid, 0.0)
@@ -1575,26 +1503,6 @@ def embed_article(zim_name: str, path: str) -> dict:
         return {"ok": False, "error": "Embedding failed or limit reached"}
     return {"ok": True, "chunks_added": n}
 
-
-def build_title_index(zim_name: str, progress_cb=None) -> dict:
-    """
-    Build the title index for a ZIM. Blocking — call from a background thread.
-    Returns {ok, indexed, error}.
-    """
-    with _handles_lock:
-        handle = next((h for h in _handles if h.name == zim_name), None)
-    if not handle:
-        return {"ok": False, "error": f"ZIM '{zim_name}' not found"}
-    try:
-        from indexer.title_index import build
-        n = build(handle.zim_path, progress_cb=progress_cb)
-        # Invalidate cached title vecs so next search reloads from updated DB
-        handle._title_vecs   = None
-        handle._title_paths  = None
-        handle._title_titles = None
-        return {"ok": True, "indexed": n}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
 
 
 def get_embed_limits(zim_name: str) -> dict | None:

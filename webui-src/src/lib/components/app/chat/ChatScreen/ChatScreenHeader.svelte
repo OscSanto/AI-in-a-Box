@@ -1,10 +1,9 @@
 <script lang="ts">
-	import { Settings, BookOpen, AlertTriangle } from '@lucide/svelte';
+	import { Settings, BookOpen } from '@lucide/svelte';
 	import { DialogChatSettings } from '$lib/components/app';
 	import { ModelsSelector } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { useSidebar } from '$lib/components/ui/sidebar';
-	import { inferenceBackendsStore } from '$lib/stores/inferenceBackends.svelte';
 
 	interface Props {
 		onToggleSources?: () => void;
@@ -15,18 +14,10 @@
 	const sidebar = useSidebar();
 
 	let settingsOpen = $state(false);
-	let backendsSettingsOpen = $state(false);
 
 	function toggleSettings() {
 		settingsOpen = true;
 	}
-
-	function openBackendsSettings() {
-		backendsSettingsOpen = true;
-	}
-
-	const activeBackend = $derived(inferenceBackendsStore.activeBackendName);
-	const isPiLocal = $derived(activeBackend === 'Pi Local');
 </script>
 
 <header
@@ -36,24 +27,6 @@
 >
 	<div class="pointer-events-auto flex items-center gap-2 {!sidebar.open ? 'pl-10' : ''}">
 		<ModelsSelector forceForegroundText={true} />
-
-		{#if activeBackend && isPiLocal}
-			<button
-				onclick={openBackendsSettings}
-				class="flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-600 backdrop-blur-lg hover:bg-amber-500/25 dark:text-amber-400"
-				title="Running on Pi — click to configure remote backends"
-			>
-				<AlertTriangle class="h-3 w-3" />
-				Pi Local
-			</button>
-		{:else if activeBackend && activeBackend !== 'Pi Local'}
-			<span
-				class="rounded-full bg-green-500/15 px-2 py-0.5 text-xs font-medium text-green-600 backdrop-blur-lg dark:text-green-400"
-				title="Using remote backend: {activeBackend}"
-			>
-				{activeBackend}
-			</span>
-		{/if}
 	</div>
 
 	<div class="pointer-events-auto flex items-center space-x-2">
@@ -77,8 +50,3 @@
 </header>
 
 <DialogChatSettings open={settingsOpen} onOpenChange={(open) => (settingsOpen = open)} />
-<DialogChatSettings
-	open={backendsSettingsOpen}
-	onOpenChange={(open) => (backendsSettingsOpen = open)}
-	initialSection="Backends"
-/>

@@ -1,9 +1,4 @@
-/**
- * Stores the user-selected pipeline mode ("fast" | "balanced" | "complex").
- * Read by chatStore.getApiOptions() and sent to the backend with every request.
- */
-
-export type PipelineMode = 'fast' | 'balanced' | 'complex';
+export type PipelineMode = 'balanced';
 
 let _mode = $state<PipelineMode>('balanced');
 

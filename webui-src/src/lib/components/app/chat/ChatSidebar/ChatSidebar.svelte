@@ -164,7 +164,6 @@
 	</ScrollArea>
 
 	<Sidebar.Footer class="border-t border-border/40 px-4 py-3 space-y-1">
-		<div id="webgpu-slot"></div>
 		<a
 			href="#/metrics"
 			onclick={handleMobileSidebarItemClick}

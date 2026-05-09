@@ -1,10 +1,9 @@
 """
 Chat completions and RAG pipeline.
 
-Implements POST /v1/chat/completions with three paths:
+Implements POST /v1/chat/completions with two paths:
   - "chat" mode: direct Ollama pass-through (no retrieval)
-  - RAG modes (fast/balanced/complex): embed query → FAISS+BM25 search → compact context → LLM stream
-  - Semantic cache: near-identical queries bypass LLM and return a stored answer
+  - "balanced" mode: embed query → FAISS+BM25 search → compact context → LLM stream
 
 Also exposes GET /props (llama.cpp-compatible server info for the WebUI).
 """
@@ -20,11 +19,9 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from SearchEngine.cache import db_ai_mode_lookup, db_set_ai_mode
 from SearchEngine.config import AI_MODE_CFG, AI_MODE_LLM_MODEL, AI_MODE_LLM_OPTIONS, OLLAMA_TIMEOUT, _load_prompt
-from SearchEngine.embedding import embed_ai_mode
-from SearchEngine.metrics import llm_metrics
+from SearchEngine.embedding import embed
 from SearchEngine.metrics.llm_client import _extract_timings as _llm_extract_timings
 import SearchEngine.zim_retrieval as zim_retrieval
-from api.backends import select_backend
 from api.models import OLLAMA_SUPPORTED_KEYS, get_active_model
 
 import asyncio
@@ -143,8 +140,7 @@ def _latest_user_message(messages: list) -> str:
 
 
 def _sse(chat_id: str, created: int, text: str, finish: bool = False,
-         se_metrics: dict | None = None, model: str = "searchengine",
-         backend: str | None = None) -> str:
+         model: str = "searchengine", backend: str | None = None) -> str:
     delta: dict = {"content": text}
     if finish:
         delta["model"] = model
@@ -155,8 +151,6 @@ def _sse(chat_id: str, created: int, text: str, finish: bool = False,
         "model": model,
         "choices": [{"index": 0, "delta": delta, "finish_reason": "stop" if finish else None}],
     }
-    if se_metrics:
-        payload["se_metrics"] = se_metrics
     if backend:
         payload["backend"] = backend
     return "data: " + json.dumps(payload) + "\n\n"
@@ -264,18 +258,11 @@ def _compact_chunk_text(text: str, max_chars: int) -> str:
     return compact
 
 
-def _compact_context(chunks: list[str], mode: str, num_ctx: int) -> tuple[list[str], int]:
+def _compact_context(chunks: list[str], num_ctx: int) -> tuple[list[str], int]:
     if not chunks:
         return [], 0
-    if mode == "fast":
-        total_budget = min(1400, max(700, int(num_ctx * 2.6)))
-        per_chunk = max(320, total_budget // max(1, len(chunks)))
-    elif mode == "balanced":
-        total_budget = min(3200, max(1400, int(num_ctx * 3.0)))
-        per_chunk = max(500, total_budget // max(1, len(chunks)))
-    else:
-        total_budget = min(7000, max(2200, int(num_ctx * 3.4)))
-        per_chunk = max(700, total_budget // max(1, len(chunks)))
+    total_budget = min(3200, max(1400, int(num_ctx * 3.0)))
+    per_chunk = max(500, total_budget // max(1, len(chunks)))
     compacted = [_compact_chunk_text(c, per_chunk) for c in chunks]
     context = "\n\n".join(compacted)
     if len(context) <= total_budget:
@@ -359,7 +346,7 @@ async def chat_completions(request: Request):
     body = await request.json()
     messages = body.get("messages", [])
     mode = body.get("mode", "balanced")
-    if mode not in ("fast", "balanced", "complex", "chat"):
+    if mode not in ("balanced", "chat"):
         mode = "balanced"
     selected_zim = (body.get("zim") or "all").strip()
     allowed_zims = set(_available_zim_names())
@@ -383,6 +370,9 @@ async def chat_completions(request: Request):
     _mode_cfg = zim_retrieval._MODE_CFGS.get(mode, {})
     _retrieval_cfg = _mode_cfg.get("retrieval", {})
     _current_active_model = get_active_model()
+    if not _current_active_model:
+        return Response("data: [DONE]\n\n", media_type="text/event-stream",
+                        headers={"X-Error": "No model selected — pick one from the model selector"})
     _llm_model = _mode_cfg.get("llm_model", _current_active_model)
     _llm_options = dict(_mode_cfg.get("llm_options", AI_MODE_LLM_OPTIONS))
 
@@ -414,13 +404,7 @@ async def chat_completions(request: Request):
     if think is None and _mode_think is not None:
         think = bool(_mode_think)
 
-    _backend = await select_backend()
-    if _backend is None:
-        async def _no_backend():
-            yield _sse("err", int(time.time()), "No inference backend available. Check your Ollama backends in Settings.", finish=True)
-            yield "data: [DONE]\n\n"
-        return StreamingResponse(_no_backend(), media_type="text/event-stream")
-    _backend_name, _backend_url = _backend
+    _backend_name, _backend_url = "Pi Local", "http://localhost:11434"
 
     asyncio.create_task(_wake_ollama(_llm_model, _backend_url))
 
@@ -490,7 +474,6 @@ async def chat_completions(request: Request):
                     if chunk.get("done", False):
                         try:
                             _chat_timings = _llm_extract_timings(chunk, _llm_model)
-                            llm_metrics.record("answer", _llm_model, _chat_timings)
                         except Exception:
                             pass
                     if token:
@@ -526,7 +509,7 @@ async def chat_completions(request: Request):
             return
 
         # ── RAG pipeline ──────────────────────────────────────────────────────
-        query_vec = embed_ai_mode(query)
+        query_vec = embed(query)
         t_embed = time.time()
         if summary_logs:
             print(f"[webui-rag] 1_embed | took={t_embed - t0:.3f}s | vec={query_vec.shape}", flush=True)
@@ -625,7 +608,7 @@ async def chat_completions(request: Request):
 
         raw_chunks = [_format_hit_context(h) for h in zim_hits]
         num_ctx = int(_llm_options.get("num_ctx", 1024))
-        context_chunks, context_len = _compact_context(raw_chunks, mode, num_ctx)
+        context_chunks, context_len = _compact_context(raw_chunks, num_ctx)
         sources = _source_cards(zim_hits, context_chunks)
         if sources:
             yield _sse_sources(chat_id, created, sources)
@@ -682,7 +665,6 @@ async def chat_completions(request: Request):
                 if chunk.get("done", False):
                     try:
                         _last_timings = _llm_extract_timings(chunk, _llm_model)
-                        llm_metrics.record("answer", _llm_model, _last_timings)
                     except Exception:
                         pass
                 if token:
@@ -717,9 +699,7 @@ async def chat_completions(request: Request):
             print(full_answer, flush=True)
             print("[webui-rag] --- end answer ---", flush=True)
 
-        records = llm_metrics.get_last(20)
-        se_metrics = next((r for r in reversed(records) if r.get("role") == "answer"), None)
-        yield _sse(chat_id, created, "", finish=True, se_metrics=se_metrics, model=_llm_model, backend=_backend_name)
+        yield _sse(chat_id, created, "", finish=True, model=_llm_model, backend=_backend_name)
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(

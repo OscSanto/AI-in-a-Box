@@ -30,7 +30,7 @@
 
 	let currentThinking = $derived(ragControls().thinking);
 	let currentMode = $derived(ragControls().mode);
-	const MODE_LABELS: Record<string, string> = { fast: 'Fast', balanced: 'Default', complex: 'Complex', chat: 'Default' };
+	const MODE_LABELS: Record<string, string> = { balanced: 'Default', chat: 'Default' };
 	let modeLabel = $derived(MODE_LABELS[currentMode] ?? currentMode);
 
 	let isNewChat = $derived(!page.params.id);
@@ -191,25 +191,18 @@
 				</DropdownMenu.SubTrigger>
 				<DropdownMenu.SubContent>
 					<DropdownMenu.Item
-						class="flex items-center gap-2 {currentMode === 'fast' ? 'font-medium text-foreground' : ''}"
-						onclick={() => setRagMode('fast')}
+						class="flex items-center gap-2 {currentMode === 'chat' ? 'font-medium text-foreground' : ''}"
+						onclick={() => setRagMode('chat')}
 					>
-						{#if currentMode === 'fast'}<span class="h-1.5 w-1.5 rounded-full bg-primary shrink-0"></span>{:else}<span class="h-1.5 w-1.5 shrink-0"></span>{/if}
-						Fast
+						{#if currentMode === 'chat'}<span class="h-1.5 w-1.5 rounded-full bg-primary shrink-0"></span>{:else}<span class="h-1.5 w-1.5 shrink-0"></span>{/if}
+						Off
 					</DropdownMenu.Item>
 					<DropdownMenu.Item
 						class="flex items-center gap-2 {currentMode === 'balanced' ? 'font-medium text-foreground' : ''}"
 						onclick={() => setRagMode('balanced')}
 					>
 						{#if currentMode === 'balanced'}<span class="h-1.5 w-1.5 rounded-full bg-primary shrink-0"></span>{:else}<span class="h-1.5 w-1.5 shrink-0"></span>{/if}
-						Default
-					</DropdownMenu.Item>
-					<DropdownMenu.Item
-						class="flex items-center gap-2 {currentMode === 'complex' ? 'font-medium text-foreground' : ''}"
-						onclick={() => setRagMode('complex')}
-					>
-						{#if currentMode === 'complex'}<span class="h-1.5 w-1.5 rounded-full bg-primary shrink-0"></span>{:else}<span class="h-1.5 w-1.5 shrink-0"></span>{/if}
-						Complex
+						On
 					</DropdownMenu.Item>
 				</DropdownMenu.SubContent>
 			</DropdownMenu.Sub>

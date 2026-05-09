@@ -414,4 +414,3 @@ export { default as DialogConversationSelection } from './DialogConversationSele
  * ```
  */
 export { default as DialogModelInformation } from './DialogModelInformation.svelte';
-export { default as DialogModelStore } from './DialogModelStore.svelte';

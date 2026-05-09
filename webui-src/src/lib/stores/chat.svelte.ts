@@ -19,7 +19,6 @@ import { setArticles } from '$lib/stores/articlesStore.svelte';
 import { pipelineMode } from '$lib/stores/pipelineMode.svelte';
 import { ragControls, resetForkActive } from '$lib/stores/ragControls.svelte';
 import { samplingOverridesStore } from '$lib/stores/samplingOverrides.svelte';
-import { inferenceBackendsStore } from '$lib/stores/inferenceBackends.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
 import {
 	selectedModelName,
@@ -636,9 +635,7 @@ class ChatStore {
 				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
 				conversationsStore.updateMessageAtIndex(idx, { seMetrics: metrics });
 			},
-			onBackend: (backend: string) => {
-				inferenceBackendsStore.setActiveBackend(backend);
-			},
+			onBackend: (_backend: string) => {},
 			onChunk: (chunk: string) => appendContentChunk(chunk),
 			onReasoningChunk: (chunk: string) => appendReasoningChunk(chunk),
 			onToolCallChunk: (chunk: string) => {

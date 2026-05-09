@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ChevronDown, Loader2, Package, Power, Store } from '@lucide/svelte';
+	import { ChevronDown, Loader2, Package, Power } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
@@ -97,7 +97,6 @@
 	});
 
 	let isOpen = $state(false);
-	let showModelStore = $state(false);
 
 	onMount(() => {
 		modelsStore.fetch().catch((error) => {
@@ -472,27 +471,7 @@
 					</div>
 				{/if}
 
-				<!-- Browse Store footer (both modes) -->
-				<div class="border-t border-border px-2 py-1.5">
-					<button
-						type="button"
-						class="flex w-full items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-						onclick={() => {
-							handleOpenChange(false);
-							showModelStore = true;
-						}}
-					>
-						<Store class="h-3.5 w-3.5" />
-						Browse Store
-					</button>
-				</div>
 			</DropdownMenu.Content>
 		</DropdownMenu.Root>
 	{/if}
 </div>
-
-{#if showModelStore}
-	{#await import('$lib/components/app/dialogs/DialogModelStore.svelte') then { default: DialogModelStore }}
-		<DialogModelStore bind:open={showModelStore} />
-	{/await}
-{/if}
