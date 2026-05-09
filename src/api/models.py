@@ -1,11 +1,12 @@
 """LLM model management — list models and get/set the active model."""
 import threading
 
+import httpx
 import ollama
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
-from SearchEngine.config import AI_MODE_LLM_MODEL
+from SearchEngine.config import AI_MODE_LLM_MODEL, CFG
 
 router = APIRouter()
 
@@ -94,6 +95,66 @@ def sampling_config():
             "caps": cfg.get("caps", {}),
         }
     return {"ollama_defaults": _OLLAMA_SAMPLING_DEFAULTS, "modes": modes}
+
+
+@router.get("/api/model-store")
+def model_store():
+    """Return the curated list of recommended models for the Download panel."""
+    return CFG.get("model_store", {"families": []})
+
+
+@router.get("/api/hf/search")
+async def hf_search(q: str = "", limit: int = 20):
+    """Proxy Hugging Face model search, filtered to GGUF models pullable by Ollama."""
+    params = {
+        "filter": "gguf", "sort": "downloads", "direction": "-1",
+        "limit": min(limit, 50), "full": "false",
+    }
+    if q.strip():
+        params["search"] = q.strip()
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get("https://huggingface.co/api/models", params=params)
+            r.raise_for_status()
+        results = [
+            {
+                "id":           m.get("modelId") or m.get("id") or "",
+                "ollama_tag":   f"hf.co/{m.get('modelId') or m.get('id') or ''}",
+                "downloads":    m.get("downloads", 0),
+                "likes":        m.get("likes", 0),
+                "pipeline_tag": m.get("pipeline_tag", ""),
+            }
+            for m in r.json()
+            if m.get("modelId") or m.get("id")
+        ]
+        return {"models": results}
+    except Exception as e:
+        return JSONResponse({"error": str(e), "models": []}, status_code=502)
+
+
+@router.post("/api/ollama/pull")
+async def pull_model(request: Request):
+    """Stream an Ollama model pull, forwarding progress events to the UI."""
+    body = await request.json()
+    model = (body.get("model") or "").strip()
+    if not model:
+        return JSONResponse({"error": "model required"}, status_code=400)
+
+    import json as _json
+
+    async def _stream_pull():
+        try:
+            async with httpx.AsyncClient(timeout=600) as c:
+                async with c.stream("POST", "http://localhost:11434/api/pull",
+                                    json={"name": model}) as r:
+                    async for line in r.aiter_lines():
+                        if line:
+                            yield f"data: {line}\n\n"
+        except Exception as e:
+            yield f"data: {_json.dumps({'error': str(e)})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(_stream_pull(), media_type="text/event-stream")
 
 
 @router.post("/api/set-model")
