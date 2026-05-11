@@ -30,5 +30,3 @@ PyYAML>=6.0
 # System metrics
 psutil>=6.0.0
 
-# mDNS (local network discovery)
-zeroconf>=0.140.0

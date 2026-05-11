@@ -33,14 +33,17 @@ src/SearchEngine/embedding.py       fastembed/ONNX embedding wrapper
 src/SearchEngine/zim_retrieval.py   hybrid retrieval, fusion, reranking
 src/SearchEngine/cache.py           semantic answer cache
 src/SearchEngine/keywords.py        BM25 keyword extraction
-src/SearchEngine/metrics/           LLM metrics and dashboard assets
-src/SearchEngine/modes/             fast/balanced/complex mode configs
-src/SearchEngine/prompts/           active ai_mode prompts
-src/zim_indexer/                    ZIM extraction, SQLite/FTS5, FAISS indexer
+src/SearchEngine/db.py              SQLite/FTS5 index access
+src/SearchEngine/extract.py         ZIM article extraction (on-demand embedding)
+src/SearchEngine/index.py           FAISS index builder
+src/SearchEngine/title_index.py     semantic title search index
+src/SearchEngine/metrics/           LLM metrics client and dashboard
+src/SearchEngine/modes/             per-mode configs (balanced, chat)
+src/SearchEngine/prompts/           system prompts
+src/archive/                        archived legacy experiments/reference code
 webui-src/                          Svelte WebUI source
 webui/                              built WebUI served by FastAPI
 scripts/                            launch, nginx, and build helpers
-src/archive/                        archived legacy experiments/reference code
 ```
 
 ## Scripts
