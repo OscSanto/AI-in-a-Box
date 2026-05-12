@@ -15,7 +15,6 @@
 		resetBypassCache,
 		resetLogLevel,
 		resetRagMode,
-		resetActiveZims,
 		resetThinking,
 		resetStyle,
 		toggleThinking,
@@ -373,16 +372,9 @@
 						class="rounded-full border border-border bg-muted/70 px-2 py-0.5 text-muted-foreground transition hover:text-foreground"
 						onclick={resetRagMode}
 					>
-						ZIM ×
-					</button>
-				{/if}
-				{#if currentRagControls.activeZims.length > 0}
-					<button
-						type="button"
-						class="rounded-full border border-border bg-muted/70 px-2 py-0.5 text-muted-foreground transition hover:text-foreground"
-						onclick={resetActiveZims}
-					>
-						ZIM: {currentRagControls.activeZims.length} selected ×
+						{currentRagControls.activeZims.length > 0
+							? `ZIM: ${currentRagControls.activeZims.length} selected ×`
+							: 'ZIM ×'}
 					</button>
 				{/if}
 				{#if currentRagControls.tone !== DEFAULT_TONE || currentRagControls.format !== DEFAULT_FORMAT}

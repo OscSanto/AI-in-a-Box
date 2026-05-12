@@ -89,6 +89,7 @@
 		</DropdownMenu.Trigger>
 
 		<DropdownMenu.Content align="start" class="w-64">
+			<DropdownMenu.Label class="text-[10px] uppercase tracking-wider text-muted-foreground/60">Files</DropdownMenu.Label>
 			{#if hasVisionModality}
 				<DropdownMenu.Item
 					class="images-button flex cursor-pointer items-center gap-2"
@@ -197,7 +198,7 @@
 			</Tooltip.Root>
 
 			<DropdownMenu.Separator />
-			<DropdownMenu.Label class="text-[10px] uppercase tracking-wider text-muted-foreground/60">Commands</DropdownMenu.Label>
+			<DropdownMenu.Label class="text-[10px] uppercase tracking-wider text-muted-foreground/60">Settings</DropdownMenu.Label>
 
 			<!-- Knowledge Base -->
 			<DropdownMenu.Item
@@ -223,19 +224,22 @@
 				</div>
 			</DropdownMenu.Item>
 
-			<!-- /new — bypass cache -->
+			<DropdownMenu.Separator />
+			<DropdownMenu.Label class="text-[10px] uppercase tracking-wider text-muted-foreground/60">Commands</DropdownMenu.Label>
+
+			<!-- Fresh answer -->
 			<DropdownMenu.Item
 				class="flex cursor-pointer items-start gap-2 py-2"
 				onclick={() => setBypassCache(true)}
 			>
 				<Sparkles class="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
 				<div class="min-w-0">
-					<p class="font-mono text-xs">/new</p>
-					<p class="text-xs text-muted-foreground">Skip cache — get a fresh answer</p>
+					<p class="text-xs font-medium">Fresh answer</p>
+					<p class="text-xs text-muted-foreground">Skip cache — bypass stored responses</p>
 				</div>
 			</DropdownMenu.Item>
 
-			<!-- /think — reasoning mode (disabled if model doesn't support it) -->
+			<!-- Reasoning -->
 			{#if supportsThinking}
 				<DropdownMenu.Item
 					class="flex cursor-pointer items-start gap-2 py-2"
@@ -243,38 +247,38 @@
 				>
 					<Brain class="mt-0.5 h-3.5 w-3.5 flex-shrink-0 {currentThinking ? 'text-violet-500' : ''}" />
 					<div class="min-w-0">
-						<p class="font-mono text-xs">/think</p>
+						<p class="text-xs font-medium {currentThinking ? 'text-violet-500' : ''}">Reasoning</p>
 						<p class="text-xs text-muted-foreground">
-							{currentThinking ? 'Reasoning on — click to disable' : 'Step-by-step reasoning before answering'}
+							{currentThinking ? 'On — click to disable' : 'Step-by-step thinking before answering'}
 						</p>
 					</div>
 				</DropdownMenu.Item>
 			{:else}
 				<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-					<Tooltip.Trigger class="w-full">
+					<Tooltip.Trigger class="w-full text-left">
 						<DropdownMenu.Item class="flex items-start gap-2 py-2 opacity-40" disabled>
 							<Brain class="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
 							<div class="min-w-0">
-								<p class="font-mono text-xs">/think</p>
-								<p class="text-xs text-muted-foreground">Step-by-step reasoning before answering</p>
+								<p class="text-xs font-medium">Reasoning</p>
+								<p class="text-xs text-muted-foreground">Step-by-step thinking before answering</p>
 							</div>
 						</DropdownMenu.Item>
 					</Tooltip.Trigger>
 					<Tooltip.Content side="right">
-						<p>Only available with reasoning models (e.g. DeepSeek-R1, QwQ)</p>
+						<p>Requires a reasoning model (e.g. DeepSeek-R1, QwQ)</p>
 					</Tooltip.Content>
 				</Tooltip.Root>
 			{/if}
 
-			<!-- /reset — reset all controls -->
+			<!-- Reset -->
 			<DropdownMenu.Item
 				class="flex cursor-pointer items-start gap-2 py-2"
 				onclick={() => resetRagControls()}
 			>
 				<RotateCcw class="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
 				<div class="min-w-0">
-					<p class="font-mono text-xs">/reset</p>
-					<p class="text-xs text-muted-foreground">Reset mode, ZIM filter, and cache settings</p>
+					<p class="text-xs font-medium">Reset</p>
+					<p class="text-xs text-muted-foreground">Restore default mode, ZIM filter, and cache</p>
 				</div>
 			</DropdownMenu.Item>
 		</DropdownMenu.Content>
