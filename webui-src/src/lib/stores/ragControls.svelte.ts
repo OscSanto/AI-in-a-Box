@@ -2,12 +2,39 @@ import { setPipelineMode, type PipelineMode } from '$lib/stores/pipelineMode.sve
 
 export type RagMode = PipelineMode | 'chat';
 export type RagLogLevel = 'off' | 'summary' | 'full';
+export type RagTone = 'neutral' | 'friendly' | 'socratic';
+export type RagFormat = 'prose' | 'structured' | 'direct';
+
+export const DEFAULT_TONE: RagTone = 'neutral';
+export const DEFAULT_FORMAT: RagFormat = 'prose';
+
+export const TONE_LABELS: Record<RagTone, string> = {
+	neutral: 'Neutral',
+	friendly: 'Friendly',
+	socratic: 'Socratic',
+};
+
+export const FORMAT_LABELS: Record<RagFormat, string> = {
+	prose: 'Prose',
+	structured: 'Structured',
+	direct: 'Direct',
+};
+
+export const TONE_DESCRIPTIONS: Record<RagTone, string> = {
+	neutral: 'Factual, no filler — reads like a reference',
+	friendly: 'Plain language, no jargon — like a curious friend',
+	socratic: 'Answers then asks a follow-up to deepen understanding',
+};
+
+export const FORMAT_DESCRIPTIONS: Record<RagFormat, string> = {
+	prose: 'Flowing paragraphs, no bullet points',
+	structured: 'Headers and bullets where it helps',
+	direct: 'One-line answer first, explanation below',
+};
 
 export const RAG_COMMANDS = [
 	'/balanced',
 	'/chat',
-	'/zim',
-	'/zim all',
 	'/new',
 	'/cache',
 	'/log off',
@@ -27,25 +54,77 @@ export function modelSupportsThinking(modelName: string | null | undefined): boo
 	return THINKING_MODEL_PATTERNS.some((p) => lower.includes(p));
 }
 
+const ACTIVE_ZIMS_KEY = 'rag_active_zims';
+const TONE_KEY = 'rag_tone';
+const FORMAT_KEY = 'rag_format';
+
+function loadActiveZims(): string[] {
+	try {
+		const raw = localStorage.getItem(ACTIVE_ZIMS_KEY);
+		return raw ? JSON.parse(raw) : [];
+	} catch {
+		return [];
+	}
+}
+
+function saveActiveZims(zims: string[]): void {
+	try {
+		localStorage.setItem(ACTIVE_ZIMS_KEY, JSON.stringify(zims));
+	} catch { /* ignore */ }
+}
+
+function loadTone(): RagTone {
+	try {
+		const raw = localStorage.getItem(TONE_KEY);
+		if (raw === 'neutral' || raw === 'friendly' || raw === 'socratic') return raw;
+	} catch { /* ignore */ }
+	return DEFAULT_TONE;
+}
+
+function loadFormat(): RagFormat {
+	try {
+		const raw = localStorage.getItem(FORMAT_KEY);
+		if (raw === 'prose' || raw === 'structured' || raw === 'direct') return raw;
+	} catch { /* ignore */ }
+	return DEFAULT_FORMAT;
+}
+
+function saveTone(tone: RagTone): void {
+	try { localStorage.setItem(TONE_KEY, tone); } catch { /* ignore */ }
+}
+
+function saveFormat(format: RagFormat): void {
+	try { localStorage.setItem(FORMAT_KEY, format); } catch { /* ignore */ }
+}
+
 export interface RagControlsState {
 	mode: RagMode;
-	selectedZim: string;
+	activeZims: string[];   // empty = all ZIMs active
 	bypassCache: boolean;
 	logLevel: RagLogLevel;
 	thinking: boolean;
 	forkActive: boolean;
+	tone: RagTone;
+	format: RagFormat;
 }
 
 const DEFAULT_STATE: RagControlsState = {
 	mode: 'chat',
-	selectedZim: 'all',
+	activeZims: [],
 	bypassCache: false,
 	logLevel: 'full',
 	thinking: false,
-	forkActive: false
+	forkActive: false,
+	tone: DEFAULT_TONE,
+	format: DEFAULT_FORMAT,
 };
 
-let _state = $state<RagControlsState>({ ...DEFAULT_STATE });
+let _state = $state<RagControlsState>({
+	...DEFAULT_STATE,
+	activeZims: loadActiveZims(),
+	tone: loadTone(),
+	format: loadFormat(),
+});
 
 function syncPipelineMode(mode: RagMode): void {
 	if (mode !== 'chat') setPipelineMode(mode);
@@ -60,8 +139,21 @@ export function setRagMode(mode: RagMode): void {
 	syncPipelineMode(mode);
 }
 
-export function setSelectedZim(selectedZim: string): void {
-	_state = { ..._state, selectedZim: selectedZim || 'all' };
+export function setActiveZims(zims: string[]): void {
+	_state = { ..._state, activeZims: zims };
+	saveActiveZims(zims);
+}
+
+export function toggleZim(name: string, allZimNames: string[]): void {
+	const current = _state.activeZims;
+	// empty means all active — expand to full list first
+	const expanded = current.length === 0 ? allZimNames : [...current];
+	const next = expanded.includes(name)
+		? expanded.filter((z) => z !== name)
+		: [...expanded, name];
+	// if all are selected, collapse back to empty (= all)
+	const collapsed = next.length === allZimNames.length ? [] : next;
+	setActiveZims(collapsed);
 }
 
 export function setBypassCache(bypassCache: boolean): void {
@@ -72,9 +164,26 @@ export function setLogLevel(logLevel: RagLogLevel): void {
 	_state = { ..._state, logLevel };
 }
 
+export function setTone(tone: RagTone): void {
+	_state = { ..._state, tone };
+	saveTone(tone);
+}
+
+export function setFormat(format: RagFormat): void {
+	_state = { ..._state, format };
+	saveFormat(format);
+}
+
+export function resetStyle(): void {
+	setTone(DEFAULT_TONE);
+	setFormat(DEFAULT_FORMAT);
+}
+
 export function resetRagControls(): void {
 	_state = { ...DEFAULT_STATE };
 	syncPipelineMode(DEFAULT_STATE.mode);
+	saveTone(DEFAULT_TONE);
+	saveFormat(DEFAULT_FORMAT);
 }
 
 
@@ -83,8 +192,8 @@ export function resetRagMode(): void {
 	setRagMode(DEFAULT_STATE.mode);
 }
 
-export function resetSelectedZim(): void {
-	setSelectedZim(DEFAULT_STATE.selectedZim);
+export function resetActiveZims(): void {
+	setActiveZims(DEFAULT_STATE.activeZims);
 }
 
 export function resetBypassCache(): void {
@@ -144,11 +253,6 @@ function parseLeadingCommand(input: string): {
 		setRagMode('chat');
 		return { handled: true, remaining: text.slice(consumed).trimStart() };
 	}
-	if (command === 'zim') {
-		if (!arg) arg = consumeNextToken();
-		setSelectedZim(arg || 'all');
-		return { handled: true, remaining: text.slice(consumed).trimStart() };
-	}
 	if (command === 'new' || command === 'cache-new') {
 		setBypassCache(true);
 		return { handled: true, remaining: text.slice(consumed).trimStart() };
@@ -193,7 +297,7 @@ function parseLeadingCommand(input: string): {
 		return {
 			handled: true,
 			message:
-				'Commands: /balanced, /chat, /zim <name>, /zim all, /new, /cache, /log off|summary|full, /reset',
+				'Commands: /balanced, /chat, /new, /cache, /log off|summary|full, /think, /no_think, /reset',
 			remaining: text.slice(consumed).trimStart()
 		};
 	}

@@ -1188,13 +1188,13 @@ def search(query_text: str, top_k: int = 10,
            mode: str = "balanced",
            query_vec: np.ndarray | None = None,
            debug: bool = False,
-           zim_name: str | None = None) -> list[dict] | tuple[list[dict], list[dict]]:
+           active_zims: list[str] | None = None) -> list[dict] | tuple[list[dict], list[dict]]:
     """
     Search all loaded ZIM indexes.
 
-    mode      — "fast" | "balanced" | "complex" | "chat" (chat returns empty — no retrieval)
-    query_vec — pre-computed (384,) L2-normalised embedding; pass to avoid
-                re-embedding when the caller already has the vector.
+    mode        — "balanced" | "chat" (chat returns empty — no retrieval)
+    query_vec   — pre-computed (384,) L2-normalised embedding
+    active_zims — restrict retrieval to these ZIM names; None = all enabled ZIMs
 
     Returns list of chunk dicts sorted by rerank_score, up to top_k prose
     chunks + up to _INFOBOX_GLOBAL_MAX infobox chunks appended:
@@ -1204,7 +1204,7 @@ def search(query_text: str, top_k: int = 10,
     with _handles_lock:
         handles = list(_handles)
 
-    active = [h for h in handles if h.enabled and (not zim_name or h.name == zim_name)]
+    active = [h for h in handles if h.enabled and (not active_zims or h.name in active_zims)]
     if not active:
         return ([], []) if debug else []
 

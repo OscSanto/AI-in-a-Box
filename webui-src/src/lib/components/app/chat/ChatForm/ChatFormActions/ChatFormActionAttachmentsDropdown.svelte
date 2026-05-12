@@ -1,12 +1,21 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { Plus, MessageSquare, Sparkles, Brain, RotateCcw, Sliders } from '@lucide/svelte';
+	import { Plus, MessageSquare, Sparkles, Brain, RotateCcw, BookOpen, Palette } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { FILE_TYPE_ICONS } from '$lib/constants/icons';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants/tooltip-config';
-	import { ragControls, setBypassCache, toggleThinking, resetRagControls, setRagMode, type RagMode } from '$lib/stores/ragControls.svelte';
+	import {
+		ragControls,
+		setBypassCache,
+		toggleThinking,
+		resetRagControls,
+		DEFAULT_TONE,
+		DEFAULT_FORMAT,
+		TONE_LABELS,
+		FORMAT_LABELS,
+	} from '$lib/stores/ragControls.svelte';
 
 	interface Props {
 		class?: string;
@@ -29,9 +38,19 @@
 	}: Props = $props();
 
 	let currentThinking = $derived(ragControls().thinking);
-	let currentMode = $derived(ragControls().mode);
-	const MODE_LABELS: Record<string, string> = { balanced: 'Default', chat: 'Default' };
-	let modeLabel = $derived(MODE_LABELS[currentMode] ?? currentMode);
+	let activeZims = $derived(ragControls().activeZims);
+	let zimLabel = $derived(activeZims.length === 0 ? 'All' : `${activeZims.length} selected`);
+
+	let showKnowledgeBase = $state(false);
+	let showResponseStyle = $state(false);
+
+	let currentTone = $derived(ragControls().tone);
+	let currentFormat = $derived(ragControls().format);
+	let styleLabel = $derived(
+		currentTone === DEFAULT_TONE && currentFormat === DEFAULT_FORMAT
+			? 'Default'
+			: `${TONE_LABELS[currentTone]} · ${FORMAT_LABELS[currentFormat]}`
+	);
 
 	let isNewChat = $derived(!page.params.id);
 
@@ -180,32 +199,29 @@
 			<DropdownMenu.Separator />
 			<DropdownMenu.Label class="text-[10px] uppercase tracking-wider text-muted-foreground/60">Commands</DropdownMenu.Label>
 
-			<!-- ZIM mode submenu -->
-			<DropdownMenu.Sub>
-				<DropdownMenu.SubTrigger class="flex cursor-pointer items-start gap-2 py-2">
-					<Sliders class="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
-					<div class="min-w-0">
-						<p class="font-mono text-xs">ZIM</p>
-						<p class="text-xs text-muted-foreground">Currently: {modeLabel}</p>
-					</div>
-				</DropdownMenu.SubTrigger>
-				<DropdownMenu.SubContent>
-					<DropdownMenu.Item
-						class="flex items-center gap-2 {currentMode === 'chat' ? 'font-medium text-foreground' : ''}"
-						onclick={() => setRagMode('chat')}
-					>
-						{#if currentMode === 'chat'}<span class="h-1.5 w-1.5 rounded-full bg-primary shrink-0"></span>{:else}<span class="h-1.5 w-1.5 shrink-0"></span>{/if}
-						Off
-					</DropdownMenu.Item>
-					<DropdownMenu.Item
-						class="flex items-center gap-2 {currentMode === 'balanced' ? 'font-medium text-foreground' : ''}"
-						onclick={() => setRagMode('balanced')}
-					>
-						{#if currentMode === 'balanced'}<span class="h-1.5 w-1.5 rounded-full bg-primary shrink-0"></span>{:else}<span class="h-1.5 w-1.5 shrink-0"></span>{/if}
-						On
-					</DropdownMenu.Item>
-				</DropdownMenu.SubContent>
-			</DropdownMenu.Sub>
+			<!-- Knowledge Base -->
+			<DropdownMenu.Item
+				class="flex cursor-pointer items-start gap-2 py-2"
+				onclick={() => { dropdownOpen = false; showKnowledgeBase = true; }}
+			>
+				<BookOpen class="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+				<div class="min-w-0">
+					<p class="text-xs font-medium">Knowledge Base</p>
+					<p class="text-xs text-muted-foreground">ZIM libraries — {zimLabel}</p>
+				</div>
+			</DropdownMenu.Item>
+
+			<!-- Response Style -->
+			<DropdownMenu.Item
+				class="flex cursor-pointer items-start gap-2 py-2"
+				onclick={() => { dropdownOpen = false; showResponseStyle = true; }}
+			>
+				<Palette class="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+				<div class="min-w-0">
+					<p class="text-xs font-medium">Response Style</p>
+					<p class="text-xs text-muted-foreground">{styleLabel}</p>
+				</div>
+			</DropdownMenu.Item>
 
 			<!-- /new — bypass cache -->
 			<DropdownMenu.Item
@@ -264,3 +280,15 @@
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 </div>
+
+{#if showKnowledgeBase}
+	{#await import('$lib/components/app/dialogs/DialogKnowledgeBase.svelte') then { default: DialogKnowledgeBase }}
+		<DialogKnowledgeBase bind:open={showKnowledgeBase} />
+	{/await}
+{/if}
+
+{#if showResponseStyle}
+	{#await import('$lib/components/app/dialogs/DialogResponseStyle.svelte') then { default: DialogResponseStyle }}
+		<DialogResponseStyle bind:open={showResponseStyle} />
+	{/await}
+{/if}
