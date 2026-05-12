@@ -13,12 +13,6 @@ def _load_cfg() -> dict:
         return yaml.safe_load(f)
 
 
-def _load_prompt(rel_path: str) -> str:
-    """Load a system prompt from a .md file path relative to the config directory."""
-    full_path = os.path.join(os.path.dirname(_CFG_PATH), rel_path)
-    with open(full_path) as f:
-        return f.read().strip()
-
 CFG = _load_cfg()
 EMBED_MODEL = CFG.get("embed_model", "Snowflake/snowflake-arctic-embed-xs")
 AI_MODE_CFG      = CFG.get("ai_mode", {})

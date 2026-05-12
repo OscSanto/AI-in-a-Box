@@ -168,33 +168,33 @@ def _sse(chat_id: str, created: int, text: str, finish: bool = False,
     return "data: " + json.dumps(payload) + "\n\n"
 
 
-def _sse_metrics(chat_id: str, created: int, timings: dict) -> str:
+def _sse_metrics(chat_id: str, created: int, timings: dict, model: str = "") -> str:
     return "data: " + json.dumps({
         "id": chat_id,
         "object": "chat.completion.chunk",
         "created": created,
-        "model": "searchengine",
+        "model": model,
         "choices": [{"index": 0, "delta": {}, "finish_reason": None}],
         "se_metrics": timings,
     }) + "\n\n"
 
 
-def _sse_thinking(chat_id: str, created: int, text: str) -> str:
+def _sse_thinking(chat_id: str, created: int, text: str, model: str = "") -> str:
     return "data: " + json.dumps({
         "id": chat_id,
         "object": "chat.completion.chunk",
         "created": created,
-        "model": "searchengine",
+        "model": model,
         "choices": [{"index": 0, "delta": {"reasoning_content": text}, "finish_reason": None}],
     }) + "\n\n"
 
 
-def _sse_sources(chat_id: str, created: int, sources: list[dict]) -> str:
+def _sse_sources(chat_id: str, created: int, sources: list[dict], model: str = "") -> str:
     return "data: " + json.dumps({
         "id": chat_id,
         "object": "chat.completion.chunk",
         "created": created,
-        "model": "searchengine",
+        "model": model,
         "sources": sources,
         "choices": [{"index": 0, "delta": {"content": ""}}],
     }) + "\n\n"
@@ -502,7 +502,7 @@ async def chat_completions(request: Request):
                         continue
                     thinking = chunk["message"].get("thinking") or ""
                     if thinking:
-                        yield _sse_thinking(chat_id, created, thinking)
+                        yield _sse_thinking(chat_id, created, thinking, model=_llm_model)
                     token = chunk["message"]["content"]
                     if chunk.get("done", False):
                         try:
@@ -538,7 +538,7 @@ async def chat_completions(request: Request):
                 print(full_answer, flush=True)
                 print("[webui-rag] --- end answer ---", flush=True)
             if _chat_timings:
-                yield _sse_metrics(chat_id, created, _chat_timings)
+                yield _sse_metrics(chat_id, created, _chat_timings, model=_llm_model)
             yield _sse(chat_id, created, "", finish=True, model=_llm_model, backend=_backend_name)
             yield "data: [DONE]\n\n"
             return
@@ -647,7 +647,7 @@ async def chat_completions(request: Request):
         context_chunks, context_len = _compact_context(raw_chunks, num_ctx)
         sources = _source_cards(zim_hits, context_chunks)
         if sources:
-            yield _sse_sources(chat_id, created, sources)
+            yield _sse_sources(chat_id, created, sources, model=_llm_model)
 
         context = "\n\n".join(context_chunks)
         raw_context_len = len("\n\n".join(raw_chunks))
@@ -697,7 +697,7 @@ async def chat_completions(request: Request):
                     continue
                 thinking = chunk["message"].get("thinking") or ""
                 if thinking:
-                    yield _sse_thinking(chat_id, created, thinking)
+                    yield _sse_thinking(chat_id, created, thinking, model=_llm_model)
                 token = chunk["message"]["content"]
                 if chunk.get("done", False):
                     try:
@@ -736,7 +736,7 @@ async def chat_completions(request: Request):
             print(full_answer, flush=True)
             print("[webui-rag] --- end answer ---", flush=True)
         if _last_timings:
-            yield _sse_metrics(chat_id, created, _last_timings)
+            yield _sse_metrics(chat_id, created, _last_timings, model=_llm_model)
         yield _sse(chat_id, created, "", finish=True, model=_llm_model, backend=_backend_name)
         yield "data: [DONE]\n\n"
 

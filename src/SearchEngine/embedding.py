@@ -83,16 +83,16 @@ def _encode(texts: list[str]) -> np.ndarray:
             if entry and (time.monotonic() - entry[0]) < _EMBED_CACHE_TTL:
                 return entry[1][np.newaxis] 
         
-        raw = list(_embed_model.embed(texts))  # generator → list of 1-D arrays
-        vecs = np.array(raw, dtype=np.float32)  # stack into (n, dim) matrix
+        raw = list(_embed_model.embed(texts))  # list of (embed_dim,) 1D arrays. One per text.
+        vecs = np.array(raw, dtype=np.float32)  # Faiss expects float32. We stack into 2D matrix. (n, embed_dim) 
 
+    # L2 normalize for FAISS inner product search (equiv to cosine similarity)
     norms = np.linalg.norm(vecs, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
     vecs = vecs / norms
 
     if len(texts) == 1:
         _embed_cache[texts[0]] = (time.monotonic(), vecs[0])
-
     return vecs
 
 # HELPER FUNCTIONS 

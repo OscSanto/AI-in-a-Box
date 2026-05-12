@@ -33,8 +33,6 @@ WEBUI_DIR    = os.path.join(os.path.dirname(__file__), "..", "webui")
 # KEEP GENEREATED FILES OUT OF THE REPO. 
 _RUNTIME_DIR = Path(os.path.dirname(os.path.abspath(__file__))).parent / "runtime"
 
-
-
 @asynccontextmanager 
 async def lifespan(app: FastAPI): 
     _RUNTIME_DIR.mkdir(exist_ok=True) 
@@ -70,25 +68,12 @@ def client_config():
     Imports are deferred here to avoid circular imports between main, api.chat,
     and SearchEngine at module load time. """
     from api.chat import _available_zim_names
-    from SearchEngine.config import CFG, _load_prompt
-    from SearchEngine.zim_retrieval import _MODE_CFGS
-
-    # mode entry: for each mode (and when switching), load system prompt text (if any)
-    def _mode_entry(name: str) -> dict:
-        mode_cfg = _MODE_CFGS.get(name, {})
-        prompt_path = mode_cfg.get("system_prompt")
-        return {
-            "system_prompt_path": prompt_path,
-            "system_prompt": _load_prompt(prompt_path) if prompt_path else "",
-        }
+    from SearchEngine.config import CFG
 
     return {
         "zims": _available_zim_names(),
         "flash_attention": bool(CFG.get("ollama_flash_attention", False)),
-        "modes": {name: _mode_entry(name) for name in ("chat", "balanced")},
     }
-
-
 
 if __name__ == "__main__":
     import uvicorn
