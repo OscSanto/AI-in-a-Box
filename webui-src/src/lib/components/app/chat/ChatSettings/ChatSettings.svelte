@@ -126,6 +126,11 @@
 					key: SETTINGS_KEYS.ASK_FOR_TITLE_CONFIRMATION,
 					label: 'Ask for confirmation before changing conversation title',
 					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.FLASH_ATTENTION,
+					label: 'Flash Attention',
+					type: SettingsFieldType.CHECKBOX
 				}
 			]
 		},

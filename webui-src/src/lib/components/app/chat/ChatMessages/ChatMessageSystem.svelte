@@ -1,12 +1,11 @@
 <script lang="ts">
-	import { Check, RotateCcw, X } from '@lucide/svelte';
+	import { Check, X } from '@lucide/svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { MarkdownContent } from '$lib/components/app';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { INPUT_CLASSES } from '$lib/constants/css-classes';
 	import { config } from '$lib/stores/settings.svelte';
-	import { chatStore } from '$lib/stores/chat.svelte';
 	import { isIMEComposing } from '$lib/utils';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 	import { KeyboardKey, MessageRole } from '$lib/enums';
@@ -69,8 +68,6 @@
 	const currentConfig = config();
 
 	let showExpandButton = $derived(contentHeight > MAX_HEIGHT);
-	let isRevertingToDefault = $state(false);
-
 	$effect(() => {
 		if (!messageElement || !message.content.trim()) return;
 
@@ -99,15 +96,7 @@
 		isExpanded = !isExpanded;
 	}
 
-	async function handleRevertToModePrompt() {
-		isRevertingToDefault = true;
-		try {
-			const prompt = await chatStore.getCurrentModeSystemPrompt();
-			editCtx.setContent(prompt);
-		} finally {
-			isRevertingToDefault = false;
-		}
-	}
+
 </script>
 
 <div
@@ -127,18 +116,6 @@
 			></textarea>
 
 			<div class="mt-2 flex justify-end gap-2">
-				<Button
-					class="h-8 px-3"
-					onclick={handleRevertToModePrompt}
-					disabled={isRevertingToDefault}
-					size="sm"
-					variant="outline"
-				>
-					<RotateCcw class="mr-1 h-3 w-3" />
-
-					Revert to Mode Prompt
-				</Button>
-
 				<Button class="h-8 px-3" onclick={editCtx.cancel} size="sm" variant="outline">
 					<X class="mr-1 h-3 w-3" />
 

@@ -433,6 +433,9 @@ async def chat_completions(request: Request):
         _format = "prose"
     _style_prompt = f"{_TONE_PROMPTS[_tone]}\n\n{_FORMAT_HINTS[_format]}"
     _system_prompt = f"{_style_prompt}\n\n{_custom_system}" if _custom_system else _style_prompt
+    if body.get("flash_attention"):
+        _llm_options["flash_attn"] = True
+
     _mode_think = _mode_cfg.get("think", None)
     if think is None and _mode_think is not None:
         think = bool(_mode_think)

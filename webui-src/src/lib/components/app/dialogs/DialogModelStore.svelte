@@ -14,7 +14,7 @@
 
 	type StoreVariant = { tag: string; params: string; description: string };
 	type StoreFamily  = { name: string; description: string; variants: StoreVariant[] };
-	type PullState    = { status: 'idle' | 'pulling' | 'done' | 'error'; progress: string };
+	type PullState    = { status: 'idle' | 'pulling' | 'done' | 'error'; progress: string; resolvedTag?: string };
 	type HFModel      = { id: string; ollama_tag: string; downloads: number; likes: number; pipeline_tag: string };
 
 	let activeTab      = $state<'all' | 'installed' | 'huggingface'>('all');
@@ -71,6 +71,7 @@
 	// ── pull ──────────────────────────────────────────────────────────────────────
 	async function pullModel(tag: string) {
 		if (!tag || pullStates[tag]?.status === 'pulling') return;
+		const tagsBefore = new Set(modelOptions().map((m) => m.model));
 		pullStates[tag] = { status: 'pulling', progress: 'Starting…' };
 		try {
 			const res    = await fetch('/api/ollama/pull', {
@@ -102,8 +103,10 @@
 					} catch { /* skip */ }
 				}
 			}
-			pullStates[tag] = { status: 'done', progress: 'Installed' };
 			await modelsStore.fetch(true);
+			// Find the actual name Ollama stored the model under (may differ from pull tag)
+			const resolvedTag = modelOptions().find((m) => !tagsBefore.has(m.model))?.model;
+			pullStates[tag] = { status: 'done', progress: 'Installed', resolvedTag };
 		} catch (e) {
 			pullStates[tag] = { status: 'error', progress: e instanceof Error ? e.message : 'Failed' };
 		}
@@ -365,10 +368,12 @@
 					{:else}
 						<div class="divide-y divide-border">
 							{#each hfResults as model (model.id)}
-								{@const tag       = model.ollama_tag}
-								{@const installed = installedTags.has(tag)}
-								{@const isActive  = currentModel === tag}
-								{@const ps        = pullStates[tag]}
+								{@const tag          = model.ollama_tag}
+								{@const hfId         = tag.replace('hf.co/', '')}
+								{@const ps           = pullStates[tag]}
+								{@const resolvedTag  = ps?.resolvedTag ?? installedModels.find((m) => m.model.toLowerCase().includes(hfId.toLowerCase()))?.model}
+								{@const installed    = !!(resolvedTag || installedTags.has(tag))}
+								{@const isActive     = currentModel === tag || currentModel === resolvedTag}
 
 								<div class="flex items-start gap-3 px-4 py-3">
 									<div class="min-w-0 flex-1">
@@ -392,7 +397,12 @@
 												HF <ExternalLink class="h-2.5 w-2.5" />
 											</a>
 										</div>
-										<p class="mt-0.5 font-mono text-[10px] text-muted-foreground/60">{tag}</p>
+										<p class="mt-0.5 font-mono text-[10px] text-muted-foreground/60">
+										{resolvedTag || tag}
+										{#if resolvedTag && resolvedTag !== tag}
+											<span class="text-muted-foreground/40"> (stored as)</span>
+										{/if}
+									</p>
 										{#if ps?.status === 'pulling' || ps?.status === 'error'}
 											<p class={cn('mt-1 text-xs', ps.status === 'error' ? 'text-red-500' : 'text-blue-500')}>
 												{ps.progress}
@@ -405,7 +415,7 @@
 									{:else if installed}
 										<button type="button"
 											class="shrink-0 self-center rounded-md bg-muted px-3 py-1.5 text-xs font-medium hover:bg-accent"
-											onclick={() => useModel(tag)}>Use</button>
+											onclick={() => useModel(resolvedTag || tag)}>Use</button>
 									{:else if ps?.status === 'pulling'}
 										<button type="button" disabled
 											class="shrink-0 self-center flex items-center gap-1 rounded-md bg-blue-500/10 px-3 py-1.5 text-xs font-medium text-blue-600">
@@ -414,7 +424,7 @@
 									{:else if ps?.status === 'done'}
 										<button type="button"
 											class="shrink-0 self-center flex items-center gap-1 rounded-md bg-green-500/10 px-3 py-1.5 text-xs font-medium text-green-600"
-											onclick={() => useModel(tag)}>
+											onclick={() => useModel(resolvedTag || tag)}>
 											<Check class="h-3 w-3" />Use
 										</button>
 									{:else if ps?.status === 'error'}
