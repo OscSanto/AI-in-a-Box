@@ -15,11 +15,15 @@
 		resetBypassCache,
 		resetLogLevel,
 		resetRagMode,
-		resetSelectedZim,
 		resetThinking,
+		resetStyle,
 		toggleThinking,
 		modelSupportsThinking,
-		suggestRagCommand
+		suggestRagCommand,
+		DEFAULT_TONE,
+		DEFAULT_FORMAT,
+		TONE_LABELS,
+		FORMAT_LABELS,
 	} from '$lib/stores/ragControls.svelte';
 	import { modelOptions, selectedModelId, selectedModelName, singleModelName } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
@@ -368,16 +372,18 @@
 						class="rounded-full border border-border bg-muted/70 px-2 py-0.5 text-muted-foreground transition hover:text-foreground"
 						onclick={resetRagMode}
 					>
-						ZIM: {currentRagControls.mode === 'fast' ? 'Fast' : currentRagControls.mode === 'complex' ? 'Complex' : 'Default'} ×
+						{currentRagControls.activeZims.length > 0
+							? `ZIM: ${currentRagControls.activeZims.length} selected ×`
+							: 'ZIM ×'}
 					</button>
 				{/if}
-				{#if currentRagControls.selectedZim !== 'all'}
+				{#if currentRagControls.tone !== DEFAULT_TONE || currentRagControls.format !== DEFAULT_FORMAT}
 					<button
 						type="button"
 						class="rounded-full border border-border bg-muted/70 px-2 py-0.5 text-muted-foreground transition hover:text-foreground"
-						onclick={resetSelectedZim}
+						onclick={resetStyle}
 					>
-						ZIM: {currentRagControls.selectedZim} x
+						Style: {TONE_LABELS[currentRagControls.tone]} · {FORMAT_LABELS[currentRagControls.format]} ×
 					</button>
 				{/if}
 				{#if currentRagControls.bypassCache}

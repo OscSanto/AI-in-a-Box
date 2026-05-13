@@ -8,7 +8,6 @@
 		ChevronLeft,
 		ChevronRight,
 		Database,
-		Server,
 		RotateCcw,
 		BookOpen
 	} from '@lucide/svelte';
@@ -17,7 +16,6 @@
 		ChatSettingsImportExportTab,
 		ChatSettingsFields
 	} from '$lib/components/app';
-	import InferenceBackendSettings from './InferenceBackendSettings.svelte';
 	import LibrariesTab from './LibrariesTab.svelte';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
@@ -128,6 +126,11 @@
 					key: SETTINGS_KEYS.ASK_FOR_TITLE_CONFIRMATION,
 					label: 'Ask for confirmation before changing conversation title',
 					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.FLASH_ATTENTION,
+					label: 'Flash Attention',
+					type: SettingsFieldType.CHECKBOX
 				}
 			]
 		},
@@ -214,11 +217,6 @@
 				{ key: SETTINGS_KEYS.DRY_ALLOWED_LENGTH, label: 'DRY allowed length', type: SettingsFieldType.INPUT },
 				{ key: SETTINGS_KEYS.DRY_PENALTY_LAST_N, label: 'DRY penalty last N', type: SettingsFieldType.INPUT }
 			]
-		},
-		{
-			title: SETTINGS_SECTION_TITLES.BACKENDS,
-			icon: Server,
-			fields: []
 		},
 		{
 			title: SETTINGS_SECTION_TITLES.LIBRARIES,
@@ -515,8 +513,6 @@
 
 				{#if currentSection.title === SETTINGS_SECTION_TITLES.IMPORT_EXPORT}
 					<ChatSettingsImportExportTab />
-				{:else if currentSection.title === SETTINGS_SECTION_TITLES.BACKENDS}
-					<InferenceBackendSettings />
 				{:else if currentSection.title === SETTINGS_SECTION_TITLES.LIBRARIES}
 					<LibrariesTab />
 				{:else}

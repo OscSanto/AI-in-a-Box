@@ -472,7 +472,7 @@
 					</div>
 				{/if}
 
-				<!-- Browse Store footer (both modes) -->
+			<!-- Browse Store footer -->
 				<div class="border-t border-border px-2 py-1.5">
 					<button
 						type="button"

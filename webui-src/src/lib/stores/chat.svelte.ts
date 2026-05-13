@@ -19,7 +19,6 @@ import { setArticles } from '$lib/stores/articlesStore.svelte';
 import { pipelineMode } from '$lib/stores/pipelineMode.svelte';
 import { ragControls, resetForkActive } from '$lib/stores/ragControls.svelte';
 import { samplingOverridesStore } from '$lib/stores/samplingOverrides.svelte';
-import { inferenceBackendsStore } from '$lib/stores/inferenceBackends.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
 import {
 	selectedModelName,
@@ -415,16 +414,7 @@ class ChatStore {
 	}
 
 	async getCurrentModeSystemPrompt(): Promise<string> {
-		try {
-			const currentMode = ragControls().mode;
-			const cfgRes = await fetch('/api/config');
-			if (!cfgRes.ok) return '';
-			const cfg = await cfgRes.json();
-			const modeKey = currentMode;
-			return cfg?.modes?.[modeKey]?.system_prompt?.trim() || '';
-		} catch {
-			return '';
-		}
+		return '';
 	}
 
 	async removeSystemPromptPlaceholder(messageId: string): Promise<boolean> {
@@ -636,9 +626,7 @@ class ChatStore {
 				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
 				conversationsStore.updateMessageAtIndex(idx, { seMetrics: metrics });
 			},
-			onBackend: (backend: string) => {
-				inferenceBackendsStore.setActiveBackend(backend);
-			},
+			onBackend: (_backend: string) => {},
 			onChunk: (chunk: string) => appendContentChunk(chunk),
 			onReasoningChunk: (chunk: string) => appendReasoningChunk(chunk),
 			onToolCallChunk: (chunk: string) => {
@@ -1483,10 +1471,12 @@ class ChatStore {
 			stream: true,
 			timings_per_token: true,
 			mode: rag.mode === 'chat' ? 'chat' : (rag.mode || pipelineMode()),
-			zim: rag.selectedZim,
+			active_zims: rag.activeZims,
 			bypass_cache: rag.bypassCache,
 			log_level: rag.logLevel,
 			think: rag.thinking,
+			tone: rag.tone,
+			format: rag.format,
 			fork: rag.forkActive,
 			conv_id: activeConversation()?.id ?? ''
 		};
@@ -1495,8 +1485,6 @@ class ChatStore {
 			const modelName = selectedModelName();
 			if (modelName) apiOptions.model = modelName;
 		}
-
-		if (currentConfig.systemMessage) apiOptions.systemMessage = currentConfig.systemMessage;
 
 		if (currentConfig.disableReasoningParsing) apiOptions.disableReasoningParsing = true;
 
@@ -1553,6 +1541,8 @@ class ChatStore {
 
 		if (currentConfig.backend_sampling)
 			apiOptions.backend_sampling = currentConfig.backend_sampling;
+
+		if (currentConfig.flashAttention) apiOptions.flash_attention = true;
 
 		if (currentConfig.custom) apiOptions.custom = currentConfig.custom;
 

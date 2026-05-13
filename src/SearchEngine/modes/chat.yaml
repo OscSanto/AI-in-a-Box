@@ -6,8 +6,6 @@ retrieval: {}
 # No llm_options — Ollama uses model defaults for the selected model.
 think: false
 
-system_prompt: "prompts/ai_mode_chat.md"
-
 caps:
   num_predict: 800
   temperature: 2.0

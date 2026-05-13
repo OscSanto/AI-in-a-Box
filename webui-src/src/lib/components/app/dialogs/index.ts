@@ -415,3 +415,5 @@ export { default as DialogConversationSelection } from './DialogConversationSele
  */
 export { default as DialogModelInformation } from './DialogModelInformation.svelte';
 export { default as DialogModelStore } from './DialogModelStore.svelte';
+export { default as DialogKnowledgeBase } from './DialogKnowledgeBase.svelte';
+export { default as DialogResponseStyle } from './DialogResponseStyle.svelte';

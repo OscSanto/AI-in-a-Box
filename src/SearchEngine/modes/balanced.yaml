@@ -16,8 +16,6 @@ llm_options:
   temperature: 0.1
   keep_alive: "25m"
 
-system_prompt: "prompts/ai_mode_balanced.md"
-
 caps:
   num_predict: 800
   temperature: 2.0

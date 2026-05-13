@@ -1,18 +1,20 @@
+host: "0.0.0.0"           # address to bind the server
+port: 5050                # port to serve the WebUI and API on
+
 ollama_timeout: 300       # seconds before an Ollama LLM call is abandoned
 ollama_flash_attention: false  # OLLAMA_FLASH_ATTENTION — GPU VRAM optimization; minimal gain on CPU-only Pi
 # Changing this requires rebuilding/re-embedding every ZIM FAISS index.
 # Query embeddings must use the same model/vector space as the stored FAISS vectors.
-embed_hf_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"  # 384-dim, 50+ languages — shared with zim_indexer, single model in RAM
+embed_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"  # 384-dim, 50+ languages — shared with zim_indexer, single model in RAM
 zim_index_base: "/library/zims/content"   # parent dir of per-ZIM index folders ({name}/data.db + {name}/faiss.index)
-db_path: "cache.db"
+db_path: "cache.db" # 
 cache_ttl: 604800     # 7 days in seconds
 
 ai_mode:
-  system_prompt: "prompts/ai_mode.md"
   llm_model: "qwen2.5:1.5b-instruct-q4_K_M"
   llm_options:
-    num_predict: 80   # 1 sentence ≈ 30-50 tokens
-    num_ctx: 512      # fast-mode fallback context window
+    num_predict: -1   # unlimited — let the model decide when to stop
+    num_ctx: 2048     # context window: system prompt + retrieved chunks + answer
     temperature: 0.1
     keep_alive: "15m"
   top_chunks: 3

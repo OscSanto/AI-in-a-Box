@@ -122,6 +122,13 @@
 
 		if (serverProps) {
 			settingsStore.syncWithServerDefaults();
+
+			// One-time migration: clear the old YAML-prefilled system message so the
+			// tone picker works. Only clears if it still matches the old ai_mode.md content.
+			const stored = config().systemMessage?.toString().trim();
+			if (stored === 'You are a factual assistant. Using only the provided context, answer the question in exactly 1 sentence. Do not repeat the question. Do not add information not in the context.') {
+				settingsStore.updateConfig('systemMessage', '');
+			}
 		}
 	});
 

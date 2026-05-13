@@ -107,7 +107,10 @@ export class ChatService {
 			timings_per_token,
 			// Config options
 			disableReasoningParsing,
-			zim,
+			active_zims,
+			think,
+			tone,
+			format,
 			bypass_cache,
 			log_level,
 			fork,
@@ -171,7 +174,10 @@ export class ChatService {
 		if (options.mode) {
 			(requestBody as Record<string, unknown>).mode = options.mode;
 		}
-		if (zim) (requestBody as Record<string, unknown>).zim = zim;
+		if (active_zims !== undefined) (requestBody as Record<string, unknown>).active_zims = active_zims;
+		if (think !== undefined) (requestBody as Record<string, unknown>).think = think;
+		if (tone) (requestBody as Record<string, unknown>).tone = tone;
+		if (format) (requestBody as Record<string, unknown>).format = format;
 		if (bypass_cache !== undefined) (requestBody as Record<string, unknown>).bypass_cache = bypass_cache;
 		if (log_level) (requestBody as Record<string, unknown>).log_level = log_level;
 		if (fork) (requestBody as Record<string, unknown>).fork = true;

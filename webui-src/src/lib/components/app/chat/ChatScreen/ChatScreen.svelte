@@ -40,6 +40,22 @@
 	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
 	import ArticlePanel from '$lib/components/app/chat/ArticlePanel/ArticlePanel.svelte';
 	import { clearSources } from '$lib/stores/articlesStore.svelte';
+	import {
+		ragControls,
+		setTone,
+		setFormat,
+		DEFAULT_TONE,
+		DEFAULT_FORMAT,
+		TONE_LABELS,
+		FORMAT_LABELS,
+		TONE_DESCRIPTIONS,
+		FORMAT_DESCRIPTIONS,
+		type RagTone,
+		type RagFormat,
+	} from '$lib/stores/ragControls.svelte';
+
+	const TONES: RagTone[] = ['neutral', 'friendly', 'socratic'];
+	const FORMATS: RagFormat[] = ['prose', 'structured', 'direct'];
 
 	let { showCenteredEmpty = false } = $props();
 
@@ -432,7 +448,7 @@
 		role="main"
 	>
 		<div class="w-full max-w-[48rem] px-4">
-			<div class="mb-10 text-center" in:fade={{ duration: 300 }}>
+			<div class="mb-6 text-center" in:fade={{ duration: 300 }}>
 				<h1 class="mb-2 text-3xl font-semibold tracking-tight">AI-in-a-Box</h1>
 
 				<p class="text-lg text-muted-foreground">
@@ -475,6 +491,46 @@
 					showHelperText={true}
 					bind:uploadedFiles
 				/>
+			</div>
+
+			<!-- Style picker -->
+			<div class="mt-6 space-y-3" in:fade={{ duration: 300, delay: 150 }}>
+				<div>
+					<p class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Tone</p>
+					<div class="grid grid-cols-3 gap-2">
+						{#each TONES as tone}
+							{@const active = ragControls().tone === tone}
+							<button
+								type="button"
+								class="rounded-lg border p-3 text-left transition {active
+									? 'border-blue-500 bg-blue-500/10'
+									: 'border-border hover:bg-muted/60'}"
+								onclick={() => setTone(tone)}
+							>
+								<p class="text-xs font-semibold">{TONE_LABELS[tone]}</p>
+								<p class="mt-1 text-xs text-muted-foreground leading-snug">{TONE_DESCRIPTIONS[tone]}</p>
+							</button>
+						{/each}
+					</div>
+				</div>
+				<div>
+					<p class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Format</p>
+					<div class="grid grid-cols-3 gap-2">
+						{#each FORMATS as fmt}
+							{@const active = ragControls().format === fmt}
+							<button
+								type="button"
+								class="rounded-lg border p-3 text-left transition {active
+									? 'border-blue-500 bg-blue-500/10'
+									: 'border-border hover:bg-muted/60'}"
+								onclick={() => setFormat(fmt)}
+							>
+								<p class="text-xs font-semibold">{FORMAT_LABELS[fmt]}</p>
+								<p class="mt-1 text-xs text-muted-foreground leading-snug">{FORMAT_DESCRIPTIONS[fmt]}</p>
+							</button>
+						{/each}
+					</div>
+				</div>
 			</div>
 		</div>
 	</div>

@@ -1,10 +1,9 @@
 """
 Chat completions and RAG pipeline.
 
-Implements POST /v1/chat/completions with three paths:
+Implements POST /v1/chat/completions with two paths:
   - "chat" mode: direct Ollama pass-through (no retrieval)
-  - RAG modes (fast/balanced/complex): embed query → FAISS+BM25 search → compact context → LLM stream
-  - Semantic cache: near-identical queries bypass LLM and return a stored answer
+  - "balanced" mode: embed query → FAISS+BM25 search → compact context → LLM stream
 
 Also exposes GET /props (llama.cpp-compatible server info for the WebUI).
 """
@@ -19,12 +18,10 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from SearchEngine.cache import db_ai_mode_lookup, db_set_ai_mode
-from SearchEngine.config import AI_MODE_CFG, AI_MODE_LLM_MODEL, AI_MODE_LLM_OPTIONS, OLLAMA_TIMEOUT, _load_prompt
-from SearchEngine.embedding import embed_ai_mode
-from SearchEngine.metrics import llm_metrics
+from SearchEngine.config import AI_MODE_CFG, AI_MODE_LLM_MODEL, AI_MODE_LLM_OPTIONS, OLLAMA_TIMEOUT
+from SearchEngine.embedding import embed
 from SearchEngine.metrics.llm_client import _extract_timings as _llm_extract_timings
 import SearchEngine.zim_retrieval as zim_retrieval
-from api.backends import select_backend
 from api.models import OLLAMA_SUPPORTED_KEYS, get_active_model
 
 import asyncio
@@ -32,6 +29,18 @@ import queue as _queue
 import threading as _threading
 
 router = APIRouter()
+
+_TONE_PROMPTS: dict[str, str] = {
+    "neutral":  "You are a knowledgeable reference assistant. Answer factually using only what is provided. Do not speculate beyond the sources.",
+    "friendly": "You are a friendly, approachable assistant. Use plain language and avoid jargon. Write as if explaining to a curious friend.",
+    "socratic": "You are a thoughtful tutor. Answer the question, then ask one short follow-up question to deepen the learner's understanding.",
+}
+
+_FORMAT_HINTS: dict[str, str] = {
+    "prose":      "Answer in flowing prose — no bullet points or headers.",
+    "structured": "Structure your answer with headers and bullet points where it helps clarity.",
+    "direct":     "Give a one-sentence answer first, then explain further below.",
+}
 
 
 def _ollama_stream_with_heartbeat(stream, heartbeat_interval: float = 15.0):
@@ -143,8 +152,7 @@ def _latest_user_message(messages: list) -> str:
 
 
 def _sse(chat_id: str, created: int, text: str, finish: bool = False,
-         se_metrics: dict | None = None, model: str = "searchengine",
-         backend: str | None = None) -> str:
+         model: str = "searchengine", backend: str | None = None) -> str:
     delta: dict = {"content": text}
     if finish:
         delta["model"] = model
@@ -155,29 +163,38 @@ def _sse(chat_id: str, created: int, text: str, finish: bool = False,
         "model": model,
         "choices": [{"index": 0, "delta": delta, "finish_reason": "stop" if finish else None}],
     }
-    if se_metrics:
-        payload["se_metrics"] = se_metrics
     if backend:
         payload["backend"] = backend
     return "data: " + json.dumps(payload) + "\n\n"
 
 
-def _sse_thinking(chat_id: str, created: int, text: str) -> str:
+def _sse_metrics(chat_id: str, created: int, timings: dict, model: str = "") -> str:
     return "data: " + json.dumps({
         "id": chat_id,
         "object": "chat.completion.chunk",
         "created": created,
-        "model": "searchengine",
+        "model": model,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": None}],
+        "se_metrics": timings,
+    }) + "\n\n"
+
+
+def _sse_thinking(chat_id: str, created: int, text: str, model: str = "") -> str:
+    return "data: " + json.dumps({
+        "id": chat_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
         "choices": [{"index": 0, "delta": {"reasoning_content": text}, "finish_reason": None}],
     }) + "\n\n"
 
 
-def _sse_sources(chat_id: str, created: int, sources: list[dict]) -> str:
+def _sse_sources(chat_id: str, created: int, sources: list[dict], model: str = "") -> str:
     return "data: " + json.dumps({
         "id": chat_id,
         "object": "chat.completion.chunk",
         "created": created,
-        "model": "searchengine",
+        "model": model,
         "sources": sources,
         "choices": [{"index": 0, "delta": {"content": ""}}],
     }) + "\n\n"
@@ -264,18 +281,11 @@ def _compact_chunk_text(text: str, max_chars: int) -> str:
     return compact
 
 
-def _compact_context(chunks: list[str], mode: str, num_ctx: int) -> tuple[list[str], int]:
+def _compact_context(chunks: list[str], num_ctx: int) -> tuple[list[str], int]:
     if not chunks:
         return [], 0
-    if mode == "fast":
-        total_budget = min(1400, max(700, int(num_ctx * 2.6)))
-        per_chunk = max(320, total_budget // max(1, len(chunks)))
-    elif mode == "balanced":
-        total_budget = min(3200, max(1400, int(num_ctx * 3.0)))
-        per_chunk = max(500, total_budget // max(1, len(chunks)))
-    else:
-        total_budget = min(7000, max(2200, int(num_ctx * 3.4)))
-        per_chunk = max(700, total_budget // max(1, len(chunks)))
+    total_budget = min(3200, max(1400, int(num_ctx * 3.0)))
+    per_chunk = max(500, total_budget // max(1, len(chunks)))
     compacted = [_compact_chunk_text(c, per_chunk) for c in chunks]
     context = "\n\n".join(compacted)
     if len(context) <= total_budget:
@@ -359,19 +369,26 @@ async def chat_completions(request: Request):
     body = await request.json()
     messages = body.get("messages", [])
     mode = body.get("mode", "balanced")
-    if mode not in ("fast", "balanced", "complex", "chat"):
+    if mode not in ("balanced", "chat"):
         mode = "balanced"
-    selected_zim = (body.get("zim") or "all").strip()
     allowed_zims = set(_available_zim_names())
-    if selected_zim != "all" and selected_zim not in allowed_zims:
-        return JSONResponse(
-            {"error": f"ZIM {selected_zim!r} is not enabled by the admin config."},
-            status_code=400,
-        )
+    raw_active = body.get("active_zims")
+    if isinstance(raw_active, list) and raw_active:
+        invalid = [z for z in raw_active if z not in allowed_zims]
+        if invalid:
+            return JSONResponse(
+                {"error": f"Unknown ZIMs: {invalid}. Available: {sorted(allowed_zims)}"},
+                status_code=400,
+            )
+        active_zims: list[str] | None = [z for z in raw_active if z in allowed_zims]
+    else:
+        active_zims = None  # None = all ZIMs
     bypass_cache = bool(body.get("bypass_cache", False))
     conv_id  = str(body.get("conv_id") or "").strip()
     fork     = bool(body.get("fork", False)) and bool(conv_id)
     think = body.get("think", None)
+    if body.get("reasoning_format") == "none" and think is None:
+        think = False  # llama.cpp "none" → Ollama think=False; /think pill takes priority
     log_level = str(body.get("log_level", "full")).lower()
     if log_level not in ("off", "summary", "full"):
         log_level = "off"
@@ -383,6 +400,9 @@ async def chat_completions(request: Request):
     _mode_cfg = zim_retrieval._MODE_CFGS.get(mode, {})
     _retrieval_cfg = _mode_cfg.get("retrieval", {})
     _current_active_model = get_active_model()
+    if not _current_active_model:
+        return Response("data: [DONE]\n\n", media_type="text/event-stream",
+                        headers={"X-Error": "No model selected — pick one from the model selector"})
     _llm_model = _mode_cfg.get("llm_model", _current_active_model)
     _llm_options = dict(_mode_cfg.get("llm_options", AI_MODE_LLM_OPTIONS))
 
@@ -400,27 +420,27 @@ async def chat_completions(request: Request):
 
     _top_k = _retrieval_cfg.get("top_k", AI_MODE_CFG.get("top_chunks", 3))
     _answer_filter = bool(_retrieval_cfg.get("answer_filter", mode == "balanced"))
-    _prompt_path = _mode_cfg.get("system_prompt")
-    _default_system_prompt = _load_prompt(_prompt_path) if _prompt_path else _load_prompt(
-        AI_MODE_CFG.get("system_prompt", "prompts/ai_mode.md")
-    )
     _system_messages = [m for m in messages if m.get("role") == "system"]
     _has_explicit_system = bool(_system_messages)
     _custom_system = ""
     if _has_explicit_system:
         _custom_system = _message_text(_system_messages[0].get("content"))
-    _system_prompt = _custom_system if _has_explicit_system else _default_system_prompt
+    _tone = str(body.get("tone") or "neutral").lower()
+    _format = str(body.get("format") or "prose").lower()
+    if _tone not in _TONE_PROMPTS:
+        _tone = "neutral"
+    if _format not in _FORMAT_HINTS:
+        _format = "prose"
+    _style_prompt = f"{_TONE_PROMPTS[_tone]}\n\n{_FORMAT_HINTS[_format]}"
+    _system_prompt = f"{_style_prompt}\n\n{_custom_system}" if _custom_system else _style_prompt
+    if body.get("flash_attention"):
+        _llm_options["flash_attn"] = True
+
     _mode_think = _mode_cfg.get("think", None)
     if think is None and _mode_think is not None:
         think = bool(_mode_think)
 
-    _backend = await select_backend()
-    if _backend is None:
-        async def _no_backend():
-            yield _sse("err", int(time.time()), "No inference backend available. Check your Ollama backends in Settings.", finish=True)
-            yield "data: [DONE]\n\n"
-        return StreamingResponse(_no_backend(), media_type="text/event-stream")
-    _backend_name, _backend_url = _backend
+    _backend_name, _backend_url = "Pi Local", "http://localhost:11434"
 
     asyncio.create_task(_wake_ollama(_llm_model, _backend_url))
 
@@ -434,7 +454,7 @@ async def chat_completions(request: Request):
 
         if summary_logs:
             print(
-                f"\n[webui-rag] ===== q={query!r} mode={mode} zim={selected_zim!r} "
+                f"\n[webui-rag] ===== q={query!r} mode={mode} zim={active_zims or 'all'!r} "
                 f"cache={'bypass' if bypass_cache else 'on'} log={log_level} =====",
                 flush=True,
             )
@@ -485,26 +505,25 @@ async def chat_completions(request: Request):
                         continue
                     thinking = chunk["message"].get("thinking") or ""
                     if thinking:
-                        yield _sse_thinking(chat_id, created, thinking)
+                        yield _sse_thinking(chat_id, created, thinking, model=_llm_model)
                     token = chunk["message"]["content"]
                     if chunk.get("done", False):
                         try:
                             _chat_timings = _llm_extract_timings(chunk, _llm_model)
-                            llm_metrics.record("answer", _llm_model, _chat_timings)
                         except Exception:
                             pass
                     if token:
                         full_answer += token
-                        yield _sse(chat_id, created, token)
+                        yield _sse(chat_id, created, token, model=_llm_model)
             except Exception as e:
                 err_msg = str(e)
                 print(f"[webui-rag] LLM error on {_backend_name}: {err_msg}", flush=True)
                 if "not found" in err_msg.lower() or "no such" in err_msg.lower():
                     yield _sse(chat_id, created,
                                f"Model **{_llm_model}** is not available on **{_backend_name}**. "
-                               f"Run `ollama pull {_llm_model}` on that machine.")
+                               f"Run `ollama pull {_llm_model}` on that machine.", model=_llm_model)
                 else:
-                    yield _sse(chat_id, created, f"Inference error on {_backend_name}: {err_msg}")
+                    yield _sse(chat_id, created, f"Inference error on {_backend_name}: {err_msg}", model=_llm_model)
                 yield _sse(chat_id, created, "", finish=True, model=_llm_model, backend=_backend_name)
                 yield "data: [DONE]\n\n"
                 return
@@ -521,19 +540,21 @@ async def chat_completions(request: Request):
                 print("[webui-rag] --- answer ---", flush=True)
                 print(full_answer, flush=True)
                 print("[webui-rag] --- end answer ---", flush=True)
+            if _chat_timings:
+                yield _sse_metrics(chat_id, created, _chat_timings, model=_llm_model)
             yield _sse(chat_id, created, "", finish=True, model=_llm_model, backend=_backend_name)
             yield "data: [DONE]\n\n"
             return
 
         # ── RAG pipeline ──────────────────────────────────────────────────────
-        query_vec = embed_ai_mode(query)
+        query_vec = embed(query)
         t_embed = time.time()
         if summary_logs:
             print(f"[webui-rag] 1_embed | took={t_embed - t0:.3f}s | vec={query_vec.shape}", flush=True)
 
         search_result = zim_retrieval.search(
             query, _top_k, mode, query_vec=query_vec, debug=full_logs,
-            zim_name=None if selected_zim == "all" else selected_zim,
+            active_zims=active_zims,
         )
         if full_logs:
             zim_hits, candidate_pools = search_result
@@ -599,8 +620,9 @@ async def chat_completions(request: Request):
                 if _h.get("infobox_text"):
                     print(f"       infobox_preview={_preview(_h.get('infobox_text', ''))!r}", flush=True)
 
+        _zim_cache_key = ",".join(sorted(active_zims)) if active_zims else "all"
         cached = None if bypass_cache else db_ai_mode_lookup(
-            query_vec, mode=mode, zim_name=selected_zim, verbose=summary_logs,
+            query_vec, mode=mode, zim_name=_zim_cache_key, verbose=summary_logs,
         )
         t_cache = time.time()
         if summary_logs:
@@ -610,7 +632,7 @@ async def chat_completions(request: Request):
                 flush=True,
             )
         if cached:
-            yield _sse(chat_id, created, cached)
+            yield _sse(chat_id, created, cached, model=_llm_model)
             if full_logs:
                 print(f"[webui-rag] cached_answer:\n{cached}", flush=True)
             yield _sse(chat_id, created, "", finish=True, model=_llm_model, backend=_backend_name)
@@ -618,17 +640,17 @@ async def chat_completions(request: Request):
             return
 
         if not zim_hits:
-            yield _sse(chat_id, created, "No relevant content found.")
+            yield _sse(chat_id, created, "No relevant content found.", model=_llm_model)
             yield _sse(chat_id, created, "", finish=True, model=_llm_model, backend=_backend_name)
             yield "data: [DONE]\n\n"
             return
 
         raw_chunks = [_format_hit_context(h) for h in zim_hits]
         num_ctx = int(_llm_options.get("num_ctx", 1024))
-        context_chunks, context_len = _compact_context(raw_chunks, mode, num_ctx)
+        context_chunks, context_len = _compact_context(raw_chunks, num_ctx)
         sources = _source_cards(zim_hits, context_chunks)
         if sources:
-            yield _sse_sources(chat_id, created, sources)
+            yield _sse_sources(chat_id, created, sources, model=_llm_model)
 
         context = "\n\n".join(context_chunks)
         raw_context_len = len("\n\n".join(raw_chunks))
@@ -652,9 +674,10 @@ async def chat_completions(request: Request):
 
         full_answer = ""
         _history_pairs = _fork_history_pairs(messages, fork)
+        _doc_blocks = "\n".join(f"<document>\n{c}\n</document>" for c in context_chunks)
         llm_messages = [
             *_history_pairs,
-            {"role": "user",   "content": f"Context:\n{context}\n\nQuestion: {query}"},
+            {"role": "user", "content": f"{_doc_blocks}\n\nQuestion: {query}"},
         ]
         if _system_prompt:
             llm_messages.insert(0, {"role": "system", "content": _system_prompt})
@@ -677,32 +700,31 @@ async def chat_completions(request: Request):
                     continue
                 thinking = chunk["message"].get("thinking") or ""
                 if thinking:
-                    yield _sse_thinking(chat_id, created, thinking)
+                    yield _sse_thinking(chat_id, created, thinking, model=_llm_model)
                 token = chunk["message"]["content"]
                 if chunk.get("done", False):
                     try:
                         _last_timings = _llm_extract_timings(chunk, _llm_model)
-                        llm_metrics.record("answer", _llm_model, _last_timings)
                     except Exception:
                         pass
                 if token:
                     full_answer += token
-                    yield _sse(chat_id, created, token)
+                    yield _sse(chat_id, created, token, model=_llm_model)
         except Exception as e:
             err_msg = str(e)
             print(f"[webui-rag] LLM error on {_backend_name}: {err_msg}", flush=True)
             if "not found" in err_msg.lower() or "no such" in err_msg.lower():
                 yield _sse(chat_id, created,
                            f"Model **{_llm_model}** is not available on **{_backend_name}**. "
-                           f"Run `ollama pull {_llm_model}` on that machine.")
+                           f"Run `ollama pull {_llm_model}` on that machine.", model=_llm_model)
             else:
-                yield _sse(chat_id, created, f"Inference error on {_backend_name}: {err_msg}")
+                yield _sse(chat_id, created, f"Inference error on {_backend_name}: {err_msg}", model=_llm_model)
             yield _sse(chat_id, created, "", finish=True, model=_llm_model, backend=_backend_name)
             yield "data: [DONE]\n\n"
             return
 
         if full_answer:
-            db_set_ai_mode(query, query_vec, full_answer, mode=mode, zim_name=selected_zim)
+            db_set_ai_mode(query, query_vec, full_answer, mode=mode, zim_name=_zim_cache_key)
         t_done = time.time()
         if summary_logs:
             print(
@@ -716,10 +738,9 @@ async def chat_completions(request: Request):
             print("[webui-rag] --- answer ---", flush=True)
             print(full_answer, flush=True)
             print("[webui-rag] --- end answer ---", flush=True)
-
-        records = llm_metrics.get_last(20)
-        se_metrics = next((r for r in reversed(records) if r.get("role") == "answer"), None)
-        yield _sse(chat_id, created, "", finish=True, se_metrics=se_metrics, model=_llm_model, backend=_backend_name)
+        if _last_timings:
+            yield _sse_metrics(chat_id, created, _last_timings, model=_llm_model)
+        yield _sse(chat_id, created, "", finish=True, model=_llm_model, backend=_backend_name)
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(

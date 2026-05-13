@@ -46,6 +46,8 @@ export const SETTINGS_KEYS = {
 	DRY_BASE: 'dry_base',
 	DRY_ALLOWED_LENGTH: 'dry_allowed_length',
 	DRY_PENALTY_LAST_N: 'dry_penalty_last_n',
+	// Performance
+	FLASH_ATTENTION: 'flashAttention',
 	// Developer
 	DISABLE_REASONING_PARSING: 'disableReasoningParsing',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',

@@ -23,7 +23,10 @@ export interface SettingsChatServiceOptions {
 	model?: string;
 	// Pipeline mode selected by the user via UI buttons ("kiwix" | "chat" | "summarize")
 	mode?: string;
-	zim?: string;
+	active_zims?: string[];
+	think?: boolean;
+	tone?: string;
+	format?: string;
 	bypass_cache?: boolean;
 	log_level?: string;
 	fork?: boolean;
