@@ -1,3 +1,6 @@
+host: "0.0.0.0"           # address to bind the server
+port: 5050                # port to serve the WebUI and API on
+
 ollama_timeout: 300       # seconds before an Ollama LLM call is abandoned
 ollama_flash_attention: false  # OLLAMA_FLASH_ATTENTION — GPU VRAM optimization; minimal gain on CPU-only Pi
 # Changing this requires rebuilding/re-embedding every ZIM FAISS index.

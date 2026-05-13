@@ -77,6 +77,7 @@ def client_config():
 
 if __name__ == "__main__":
     import uvicorn
-    host = os.environ.get("HOST", "0.0.0.0")
-    port = int(os.environ.get("PORT", "5050"))
+    from SearchEngine.config import CFG as _CFG
+    host = os.environ.get("HOST") or _CFG.get("host", "0.0.0.0")
+    port = int(os.environ.get("PORT") or _CFG.get("port", 5050))
     uvicorn.run(app, host=host, port=port, log_level="info")
