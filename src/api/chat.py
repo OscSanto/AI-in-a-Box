@@ -2,7 +2,7 @@
 Chat completions and RAG pipeline.
 
 Implements POST /v1/chat/completions with two paths:
-  - "chat" mode: direct Ollama pass-through (no retrieval)
+  - "chat" mode: direct LLM pass-through (no retrieval)
   - "balanced" mode: embed query → FAISS+BM25 search → compact context → LLM stream
 
 Also exposes GET /props (llama.cpp-compatible server info for the WebUI).
@@ -13,20 +13,15 @@ import time
 import uuid
 from urllib.parse import quote
 
-import ollama
+import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from SearchEngine.cache import db_ai_mode_lookup, db_set_ai_mode
-from SearchEngine.config import AI_MODE_CFG, AI_MODE_LLM_MODEL, AI_MODE_LLM_OPTIONS, OLLAMA_TIMEOUT
+from SearchEngine.config import AI_MODE_CFG, AI_MODE_LLM_OPTIONS, LLAMACPP_CFG, LLM_TIMEOUT
 from SearchEngine.embedding import embed
-from SearchEngine.metrics.llm_client import _extract_timings as _llm_extract_timings
 import SearchEngine.zim_retrieval as zim_retrieval
-from api.models import OLLAMA_SUPPORTED_KEYS, get_active_model
-
-import asyncio
-import queue as _queue
-import threading as _threading
+from api.models import get_active_model
 
 router = APIRouter()
 
@@ -42,38 +37,6 @@ _FORMAT_HINTS: dict[str, str] = {
     "direct":     "Give a one-sentence answer first, then explain further below.",
 }
 
-
-def _ollama_stream_with_heartbeat(stream, heartbeat_interval: float = 15.0):
-    """
-    Wrap a blocking Ollama stream, yielding raw '': ping\\n\\n' SSE comments
-    every heartbeat_interval seconds while waiting for the first/next token.
-    Prevents Cloudflare 524 during slow model load on low-power hardware.
-    """
-    q: _queue.Queue = _queue.Queue()
-
-    def _worker():
-        try:
-            for chunk in stream:
-                q.put(("chunk", chunk))
-        except Exception as exc:
-            q.put(("error", exc))
-        finally:
-            q.put(("done", None))
-
-    _threading.Thread(target=_worker, daemon=True).start()
-
-    while True:
-        try:
-            kind, val = q.get(timeout=heartbeat_interval)
-        except _queue.Empty:
-            yield ": ping\n\n"
-            continue
-        if kind == "chunk":
-            yield val
-        elif kind == "error":
-            raise val
-        else:
-            break
 
 # ── Short fork-memory helpers ────────────────────────────────────────────────
 # The WebUI persists conversation trees in browser IndexedDB and sends the
@@ -324,23 +287,72 @@ def _print_llm_verbose(t: dict) -> None:
     )
 
 
-async def _wake_ollama(model: str, backend_url: str = "http://localhost:11434") -> None:
-    """
-    Warm up model into RAM before first user request.
-    Uses a minimal prompt (not empty) so Ollama actually loads weights.
-    Timeout is generous — a 7B Q4 model on Pi 5 can take 2+ minutes to load.
-    """
+def _stream_llm(messages: list, llm_options: dict, chat_id: str,
+                          created: int, model: str):
+    """Sync generator — streams llama-server SSE. Yields (sse_str, None, None) per token,
+    then (None, full_answer, timings_dict) once done."""
+    url = LLAMACPP_CFG.get("url", "http://localhost:8080")
+    payload: dict = {
+        "model":          model,
+        "messages":       messages,
+        "stream":         True,
+        "stream_options": {"include_usage": True},
+        "temperature":    llm_options.get("temperature", 0.1),
+        "max_tokens":     llm_options.get("num_predict", -1),
+    }
+    if llm_options.get("top_p"):  payload["top_p"]  = llm_options["top_p"]
+    if llm_options.get("top_k"):  payload["top_k"]  = llm_options["top_k"]
+    if llm_options.get("min_p"):  payload["min_p"]  = llm_options["min_p"]
+
+    full_answer  = ""
+    timings: dict = {}
+    finish_reason = ""
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=300) as c:
-            await c.post(
-                f"{backend_url}/api/generate",
-                json={"model": model, "keep_alive": "25m",
-                      "prompt": "Hi", "stream": False,
-                      "options": {"num_predict": 1}},
-            )
-    except Exception:
-        pass
+        with httpx.Client(timeout=LLM_TIMEOUT) as c:
+            with c.stream("POST", f"{url}/v1/chat/completions", json=payload) as r:
+                if r.status_code == 503:
+                    yield _sse(chat_id, created, "Model is still loading — please wait a moment and try again.", model=model), None, None
+                    yield None, "", {}
+                    return
+                for line in r.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if raw == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(raw)
+                    except Exception:
+                        continue
+                    # llama-server puts timings in the last content chunk
+                    if chunk.get("timings"):
+                        t = chunk["timings"]
+                        prompt_ms    = t.get("prompt_ms", 0)
+                        predicted_ms = t.get("predicted_ms", 0)
+                        prompt_n     = t.get("prompt_n", 0)
+                        predicted_n  = t.get("predicted_n", 0)
+                        prefill_s    = prompt_ms    / 1000
+                        gen_s        = predicted_ms / 1000
+                        timings = {
+                            "prefill_s":       round(prefill_s,  3),
+                            "gen_s":           round(gen_s,      3),
+                            "prompt_tokens":   prompt_n,
+                            "gen_tokens":      predicted_n,
+                            "prefill_tok_s":   round(prompt_n    / prefill_s,    1) if prefill_s    > 0 else None,
+                            "gen_tok_s":       round(predicted_n / gen_s,        1) if gen_s        > 0 else None,
+                            "was_cold":        False,
+                            "hit_token_limit": finish_reason == "length",
+                        }
+                    choice = (chunk.get("choices") or [{}])[0]
+                    if choice.get("finish_reason"):
+                        finish_reason = choice["finish_reason"]
+                    token = choice.get("delta", {}).get("content", "")
+                    if token:
+                        full_answer += token
+                        yield _sse(chat_id, created, token, model=model), None, None
+    except Exception as e:
+        yield _sse(chat_id, created, f"llama-server error: {e}", model=model), None, None
+    yield None, full_answer, timings
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -360,6 +372,7 @@ def props():
         "eos_token": "",
         "chat_template": "",
         "default_generation_settings": {},
+        "backend": "llamacpp",
     }
 
 
@@ -410,8 +423,6 @@ async def chat_completions(request: Request):
     if _user_llm_opts and isinstance(_user_llm_opts, dict):
         _caps = _mode_cfg.get("caps", {})
         for _k, _v in _user_llm_opts.items():
-            if _k not in OLLAMA_SUPPORTED_KEYS:
-                continue
             if isinstance(_v, (int, float)):
                 _cap = _caps.get(_k)
                 if _cap is not None:
@@ -433,16 +444,11 @@ async def chat_completions(request: Request):
         _format = "prose"
     _style_prompt = f"{_TONE_PROMPTS[_tone]}\n\n{_FORMAT_HINTS[_format]}"
     _system_prompt = f"{_style_prompt}\n\n{_custom_system}" if _custom_system else _style_prompt
-    if body.get("flash_attention"):
-        _llm_options["flash_attn"] = True
-
     _mode_think = _mode_cfg.get("think", None)
     if think is None and _mode_think is not None:
         think = bool(_mode_think)
 
-    _backend_name, _backend_url = "Pi Local", "http://localhost:11434"
-
-    asyncio.create_task(_wake_ollama(_llm_model, _backend_url))
+    _backend_name = "Pi Local (llama.cpp)"
 
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
@@ -481,52 +487,21 @@ async def chat_completions(request: Request):
             full_answer = ""
             _chat_timings: dict = {}
             _history_pairs = _fork_history_pairs(messages, fork)
-            _chat_client = ollama.Client(host=_backend_url, timeout=OLLAMA_TIMEOUT)
             _chat_messages = [
                 *_history_pairs,
                 {"role": "user", "content": query},
             ]
             if _system_prompt:
                 _chat_messages.insert(0, {"role": "system", "content": _system_prompt})
-            _chat_kwargs: dict = dict(
-                model=_llm_model,
-                options={k: v for k, v in _llm_options.items() if k != "keep_alive"},
-                keep_alive=_llm_options.get("keep_alive", "15m"),
-                messages=_chat_messages,
-                stream=True,
-            )
-            if think is not None:
-                _chat_kwargs["think"] = bool(think)
-            try:
-                stream = _chat_client.chat(**_chat_kwargs)
-                for chunk in _ollama_stream_with_heartbeat(stream):
-                    if isinstance(chunk, str):  # SSE heartbeat comment
-                        yield chunk
-                        continue
-                    thinking = chunk["message"].get("thinking") or ""
-                    if thinking:
-                        yield _sse_thinking(chat_id, created, thinking, model=_llm_model)
-                    token = chunk["message"]["content"]
-                    if chunk.get("done", False):
-                        try:
-                            _chat_timings = _llm_extract_timings(chunk, _llm_model)
-                        except Exception:
-                            pass
-                    if token:
-                        full_answer += token
-                        yield _sse(chat_id, created, token, model=_llm_model)
-            except Exception as e:
-                err_msg = str(e)
-                print(f"[webui-rag] LLM error on {_backend_name}: {err_msg}", flush=True)
-                if "not found" in err_msg.lower() or "no such" in err_msg.lower():
-                    yield _sse(chat_id, created,
-                               f"Model **{_llm_model}** is not available on **{_backend_name}**. "
-                               f"Run `ollama pull {_llm_model}` on that machine.", model=_llm_model)
+
+            for sse_chunk, answer, t in _stream_llm(_chat_messages, _llm_options, chat_id, created, _llm_model):
+                if answer is not None:
+                    full_answer = answer
+                    if t:
+                        _chat_timings = t
                 else:
-                    yield _sse(chat_id, created, f"Inference error on {_backend_name}: {err_msg}", model=_llm_model)
-                yield _sse(chat_id, created, "", finish=True, model=_llm_model, backend=_backend_name)
-                yield "data: [DONE]\n\n"
-                return
+                    yield sse_chunk
+
             t_done = time.time()
             if summary_logs:
                 print(
@@ -681,47 +656,14 @@ async def chat_completions(request: Request):
         ]
         if _system_prompt:
             llm_messages.insert(0, {"role": "system", "content": _system_prompt})
-        _rag_client = ollama.Client(host=_backend_url, timeout=OLLAMA_TIMEOUT)
-        _rag_chat_kwargs: dict = dict(
-            model=_llm_model,
-            options={k: v for k, v in _llm_options.items() if k != "keep_alive"},
-            keep_alive=_llm_options.get("keep_alive", "15m"),
-            messages=llm_messages,
-            stream=True,
-        )
-        if think is not None:
-            _rag_chat_kwargs["think"] = bool(think)
         _last_timings: dict = {}
-        try:
-            stream = _rag_client.chat(**_rag_chat_kwargs)
-            for chunk in _ollama_stream_with_heartbeat(stream):
-                if isinstance(chunk, str):  # SSE heartbeat comment
-                    yield chunk
-                    continue
-                thinking = chunk["message"].get("thinking") or ""
-                if thinking:
-                    yield _sse_thinking(chat_id, created, thinking, model=_llm_model)
-                token = chunk["message"]["content"]
-                if chunk.get("done", False):
-                    try:
-                        _last_timings = _llm_extract_timings(chunk, _llm_model)
-                    except Exception:
-                        pass
-                if token:
-                    full_answer += token
-                    yield _sse(chat_id, created, token, model=_llm_model)
-        except Exception as e:
-            err_msg = str(e)
-            print(f"[webui-rag] LLM error on {_backend_name}: {err_msg}", flush=True)
-            if "not found" in err_msg.lower() or "no such" in err_msg.lower():
-                yield _sse(chat_id, created,
-                           f"Model **{_llm_model}** is not available on **{_backend_name}**. "
-                           f"Run `ollama pull {_llm_model}` on that machine.", model=_llm_model)
+        for sse_chunk, answer, t in _stream_llm(llm_messages, _llm_options, chat_id, created, _llm_model):
+            if answer is not None:
+                full_answer = answer
+                if t:
+                    _last_timings = t
             else:
-                yield _sse(chat_id, created, f"Inference error on {_backend_name}: {err_msg}", model=_llm_model)
-            yield _sse(chat_id, created, "", finish=True, model=_llm_model, backend=_backend_name)
-            yield "data: [DONE]\n\n"
-            return
+                yield sse_chunk
 
         if full_answer:
             db_set_ai_mode(query, query_vec, full_answer, mode=mode, zim_name=_zim_cache_key)

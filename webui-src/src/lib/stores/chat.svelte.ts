@@ -1542,8 +1542,6 @@ class ChatStore {
 		if (currentConfig.backend_sampling)
 			apiOptions.backend_sampling = currentConfig.backend_sampling;
 
-		if (currentConfig.flashAttention) apiOptions.flash_attention = true;
-
 		if (currentConfig.custom) apiOptions.custom = currentConfig.custom;
 
 		// User sampling overrides (per-mode, only explicitly changed values)

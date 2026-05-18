@@ -27,6 +27,7 @@
 	} from '$lib/stores/ragControls.svelte';
 	import { modelOptions, selectedModelId, selectedModelName, singleModelName } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { modelSwitchStore } from '$lib/stores/modelSwitch.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { activeMessages } from '$lib/stores/conversations.svelte';
 	import { isIMEComposing, parseClipboardContent } from '$lib/utils';
@@ -336,6 +337,16 @@
 </script>
 
 <ChatFormFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
+
+{#if modelSwitchStore.isSwitching}
+	<div class="mb-2 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-400">
+		<svg class="h-3.5 w-3.5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+			<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+			<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+		</svg>
+		<span>Loading <span class="font-medium">{modelSwitchStore.switchingTo}</span> — you can send a message once it's ready.</span>
+	</div>
+{/if}
 
 <form
 	class="relative {className}"

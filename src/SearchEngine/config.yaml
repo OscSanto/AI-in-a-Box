@@ -1,8 +1,18 @@
 host: "0.0.0.0"           # address to bind the server
 port: 5050                # port to serve the WebUI and API on
 
-ollama_timeout: 300       # seconds before an Ollama LLM call is abandoned
-ollama_flash_attention: false  # OLLAMA_FLASH_ATTENTION — GPU VRAM optimization; minimal gain on CPU-only Pi
+llamacpp:
+  url: "http://localhost:8080"
+  model_dir: "/library/models"
+  model: "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+  threads: 4
+  ctx_size: 2048
+  batch_size: 512                       # tokens per batch during prompt eval (larger = faster prefill)
+  ubatch_size: 128                      # micro-batch within a batch (lower = less peak RAM)
+  mlock: false                          # lock model weights in RAM — requires root or ulimit -l unlimited
+  flash_attn: true                      # Flash Attention — reduces memory bandwidth for attention
+  extra_args: ""                        # any additional llama-server flags
+
 # Changing this requires rebuilding/re-embedding every ZIM FAISS index.
 # Query embeddings must use the same model/vector space as the stored FAISS vectors.
 embed_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"  # 384-dim, 50+ languages — shared with zim_indexer, single model in RAM
@@ -53,17 +63,6 @@ retrieval:
     title_query_overlap: 0.037
     query_coverage: 0.028
     structure_prior: 0.028
-
-# Android inference offloading.
-# If set, LLM generation is routed to the Android app instead of Ollama.
-# The app runs an Ollama-compatible server on port 11434.
-# Example: "http://192.xxx.x.x:11434"
-android_inference_url: ""
-
-# Path where MLC-compiled model directories are stored on the Pi.
-# Each subdirectory is one model (contains mlc-chat-config.json + weight shards).
-# The Android app downloads from here at setup time.
-mlc_models_path: "/library/mlc-models"
 
 zim_on_demand:
   max_loaded_zims: 0             # 0 = keep all FAISS indexes in RAM (unlimited)

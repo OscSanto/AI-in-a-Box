@@ -33,12 +33,27 @@ WEBUI_DIR    = os.path.join(os.path.dirname(__file__), "..", "webui")
 # KEEP GENEREATED FILES OUT OF THE REPO. 
 _RUNTIME_DIR = Path(os.path.dirname(os.path.abspath(__file__))).parent / "runtime"
 
-@asynccontextmanager 
-async def lifespan(app: FastAPI): 
-    _RUNTIME_DIR.mkdir(exist_ok=True) 
-    init_db(str(_RUNTIME_DIR / "cache.db")) 
-    yield 
-    # app cleanup here
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _RUNTIME_DIR.mkdir(exist_ok=True)
+    init_db(str(_RUNTIME_DIR / "cache.db"))
+    from SearchEngine.config import LLAMACPP_CFG
+    model = LLAMACPP_CFG.get("model", "").strip()
+    if model:
+        import threading
+        from api.llamacpp_process import start as _lc_start
+        def _boot():
+            try:
+                _lc_start(model)
+                print(f"[llamacpp] Server ready with {model}", flush=True)
+            except Exception as e:
+                print(f"[llamacpp] Failed to start llama-server: {e}", flush=True)
+        threading.Thread(target=_boot, daemon=True).start()
+    else:
+        print("[llamacpp] No model set in config.yaml — set llamacpp.model to auto-start", flush=True)
+    yield
+    from api.llamacpp_process import stop as _lc_stop
+    _lc_stop()
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(models_router)
@@ -68,11 +83,9 @@ def client_config():
     Imports are deferred here to avoid circular imports between main, api.chat,
     and SearchEngine at module load time. """
     from api.chat import _available_zim_names
-    from SearchEngine.config import CFG
 
     return {
         "zims": _available_zim_names(),
-        "flash_attention": bool(CFG.get("ollama_flash_attention", False)),
     }
 
 if __name__ == "__main__":

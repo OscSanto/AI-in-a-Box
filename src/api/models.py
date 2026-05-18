@@ -2,39 +2,17 @@
 import threading
 
 import httpx
-import ollama
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from SearchEngine.config import AI_MODE_LLM_MODEL, CFG
+from SearchEngine.config import CFG, LLAMACPP_CFG
 
 router = APIRouter()
 
-_OLLAMA_SAMPLING_DEFAULTS: dict = {
-    "temperature":        0.8,
-    "top_k":              40,
-    "top_p":              0.95,
-    "min_p":              0.05,
-    "repeat_last_n":      64,
-    "repeat_penalty":     1.1,
-    "presence_penalty":   0.0,
-    "frequency_penalty":  0.0,
-    "dry_multiplier":     0.0,
-    "dry_base":           1.75,
-    "dry_allowed_length": 2,
-    "dry_penalty_last_n": -1,
-    "num_predict":        -1,
-}
-
-OLLAMA_SUPPORTED_KEYS: frozenset = frozenset(_OLLAMA_SAMPLING_DEFAULTS) | {"num_predict"}
-
-_active_model_lock = threading.Lock()
-_active_model: str = AI_MODE_LLM_MODEL
-
 
 def get_active_model() -> str:
-    with _active_model_lock:
-        return _active_model
+    from api.llamacpp_process import active_model
+    return active_model()
 
 
 def _is_embedding_model(model_id: str, families: list[str]) -> bool:
@@ -46,55 +24,25 @@ def _is_embedding_model(model_id: str, families: list[str]) -> bool:
 
 @router.get("/v1/models")
 def list_models():
-    """List available LLMs from local Ollama (excludes embedding models)."""
-    try:
-        client = ollama.Client(host="http://localhost:11434", timeout=10)
-        result = client.list()
-        models_data, models_detail = [], []
-        for m in result.models:
-            mid = m.model or m.name or ""
-            det = m.details
-            families = list(det.families) if det and det.families else []
-            if _is_embedding_model(mid, families):
-                continue
-            models_data.append({
-                "id": mid, "object": "model", "owned_by": "ollama",
-                "created": int(m.modified_at.timestamp()) if m.modified_at else 0,
-                "in_cache": True, "path": mid,
-                "status": {"value": "loaded"}, "backend": "Pi Local",
-            })
-            models_detail.append({
-                "id": mid, "name": mid, "model": mid,
-                "description": " · ".join(filter(None, [
-                    det.family if det else None,
-                    det.parameter_size if det else None,
-                    det.quantization_level if det else None,
-                ])) or mid,
-                "capabilities": [], "backend": "Pi Local",
-                "details": {
-                    "parameter_size":     det.parameter_size if det else None,
-                    "family":             det.family if det else None,
-                    "families":           families,
-                    "quantization_level": det.quantization_level if det else None,
-                    "size":               m.size,
-                },
-            })
-        return {"object": "list", "data": models_data, "models": models_detail, "backend": "Pi Local"}
-    except Exception:
-        return {"object": "list", "data": [], "models": [], "backend": "Pi Local"}
-
-
-@router.get("/api/sampling-config")
-def sampling_config():
-    """Sampling parameter defaults and per-mode caps for the settings UI."""
-    from SearchEngine.zim_retrieval import _MODE_CFGS
-    modes = {}
-    for name, cfg in _MODE_CFGS.items():
-        modes[name] = {
-            "llm_options": cfg.get("llm_options", {}),
-            "caps": cfg.get("caps", {}),
-        }
-    return {"ollama_defaults": _OLLAMA_SAMPLING_DEFAULTS, "modes": modes}
+    """List available GGUF models from model_dir."""
+    from api.llamacpp_process import active_model, list_gguf_models
+    current = active_model()
+    files = list_gguf_models()
+    models_data, models_detail = [], []
+    for f in files:
+        models_data.append({
+            "id": f, "object": "model", "owned_by": "llamacpp",
+            "in_cache": True, "path": f,
+            "status": {"value": "loaded" if f == current else "idle"},
+            "backend": "Pi Local (llama.cpp)",
+        })
+        models_detail.append({
+            "id": f, "name": f, "model": f,
+            "description": f,
+            "capabilities": [], "backend": "Pi Local (llama.cpp)",
+            "details": {},
+        })
+    return {"object": "list", "data": models_data, "models": models_detail, "backend": "Pi Local (llama.cpp)"}
 
 
 @router.get("/api/model-store")
@@ -105,7 +53,7 @@ def model_store():
 
 @router.get("/api/hf/search")
 async def hf_search(q: str = "", limit: int = 20):
-    """Proxy Hugging Face model search, filtered to GGUF models pullable by Ollama."""
+    """Proxy Hugging Face model search, filtered to GGUF models."""
     params = {
         "filter": "gguf", "sort": "downloads", "direction": "-1",
         "limit": min(limit, 50), "full": "false",
@@ -132,40 +80,102 @@ async def hf_search(q: str = "", limit: int = 20):
         return JSONResponse({"error": str(e), "models": []}, status_code=502)
 
 
-@router.post("/api/ollama/pull")
-async def pull_model(request: Request):
-    """Stream an Ollama model pull, forwarding progress events to the UI."""
+@router.post("/api/set-model")
+async def set_model_endpoint(request: Request):
+    """Switch the active generation model at runtime."""
     body = await request.json()
     model = (body.get("model") or "").strip()
     if not model:
         return JSONResponse({"error": "model required"}, status_code=400)
 
+    from api.llamacpp_process import start
+    print(f"[model] Restarting llama-server with model → {model}", flush=True)
+    def _restart():
+        try:
+            start(model)
+            print(f"[model] llama-server ready with {model}", flush=True)
+        except Exception as e:
+            print(f"[model] llama-server failed to start: {e}", flush=True)
+    threading.Thread(target=_restart, daemon=True).start()
+    return {"model": model, "status": "starting"}
+
+
+@router.get("/api/llamacpp/repo-files")
+async def llamacpp_repo_files(repo: str = ""):
+    """List GGUF files available in a HuggingFace repo."""
+    if not repo.strip():
+        return JSONResponse({"error": "repo required"}, status_code=400)
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(f"https://huggingface.co/api/models/{repo.strip()}")
+            r.raise_for_status()
+        data = r.json()
+        files = [
+            {
+                "filename": s["rfilename"],
+                "size":     s.get("size", 0),
+                "url":      f"https://huggingface.co/{repo.strip()}/resolve/main/{s['rfilename']}",
+            }
+            for s in data.get("siblings", [])
+            if s.get("rfilename", "").endswith(".gguf")
+        ]
+        files.sort(key=lambda f: f["filename"])
+        return {"repo": repo.strip(), "files": files}
+    except Exception as e:
+        return JSONResponse({"error": str(e), "files": []}, status_code=502)
+
+
+@router.post("/api/llamacpp/download")
+async def llamacpp_download(request: Request):
+    """Stream download of a GGUF file into model_dir. Yields SSE progress events."""
     import json as _json
 
-    async def _stream_pull():
+    body = await request.json()
+    url      = (body.get("url") or "").strip()
+    filename = (body.get("filename") or url.split("/")[-1]).strip()
+    if not url:
+        return JSONResponse({"error": "url required"}, status_code=400)
+    if not filename.endswith(".gguf"):
+        return JSONResponse({"error": "filename must end in .gguf"}, status_code=400)
+
+    from api.llamacpp_process import _model_dir
+    dest = _model_dir() / filename
+
+    async def _stream():
         try:
             async with httpx.AsyncClient(timeout=600) as c:
-                async with c.stream("POST", "http://localhost:11434/api/pull",
-                                    json={"name": model}) as r:
-                    async for line in r.aiter_lines():
-                        if line:
-                            yield f"data: {line}\n\n"
+                async with c.stream("GET", url, follow_redirects=True) as r:
+                    r.raise_for_status()
+                    total = int(r.headers.get("content-length", 0))
+                    received = 0
+                    with open(dest, "wb") as f:
+                        async for chunk in r.aiter_bytes(65536):
+                            f.write(chunk)
+                            received += len(chunk)
+                            pct = int(received * 100 / total) if total else 0
+                            yield f"data: {_json.dumps({'received': received, 'total': total, 'pct': pct})}\n\n"
+            yield f"data: {_json.dumps({'done': True, 'filename': filename})}\n\n"
         except Exception as e:
+            try:
+                dest.unlink(missing_ok=True)
+            except Exception:
+                pass
             yield f"data: {_json.dumps({'error': str(e)})}\n\n"
         yield "data: [DONE]\n\n"
 
-    return StreamingResponse(_stream_pull(), media_type="text/event-stream")
+    return StreamingResponse(_stream(), media_type="text/event-stream")
 
 
-@router.post("/api/set-model")
-async def set_model_endpoint(request: Request):
-    """Switch the active generation model at runtime (no restart needed)."""
-    global _active_model
-    body = await request.json()
-    model = (body.get("model") or "").strip()
-    if not model:
-        return JSONResponse({"error": "model required"}, status_code=400)
-    with _active_model_lock:
-        _active_model = model
-    print(f"[model] Switched active model → {model}", flush=True)
-    return {"model": model}
+@router.get("/api/llamacpp/status")
+def llamacpp_status():
+    """Return whether llama-server is ready to accept requests."""
+    from api.llamacpp_process import is_running, active_model
+    url = LLAMACPP_CFG.get("url", "http://localhost:8080")
+    ready = False
+    if is_running():
+        try:
+            r = httpx.get(f"{url}/health", timeout=2)
+            ready = r.status_code == 200
+        except Exception:
+            pass
+    return {"ready": ready, "model": active_model()}

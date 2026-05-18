@@ -45,8 +45,6 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	dry_penalty_last_n: -1,
 	max_tokens: -1,
 	custom: '', // custom json-stringified object
-	// performance
-	flashAttention: false,
 	// experimental features
 	pyInterpreterEnabled: false,
 	enableContinueGeneration: false
@@ -55,7 +53,6 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 export const SETTING_CONFIG_INFO: Record<string, string> = {
 	apiKey: 'Set the API Key if you are using <code>--api-key</code> option for the server.',
 	systemMessage: 'Optional extra instruction appended after the tone/format prompt. Leave empty to use tone settings only.',
-	flashAttention: 'Enables Flash Attention in Ollama for faster inference. Most effective on GPU; minimal gain on CPU-only hardware.',
 	showSystemMessage: 'Display the system message at the top of each conversation.',
 	theme:
 		'Choose the color theme for the interface. You can choose between System (follows your device settings), Light, or Dark.',
